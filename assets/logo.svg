@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title description">
+  <title id="title">WinCred Libsecret Dual-Key Guardian</title>
+  <desc id="description">A close-up lavender penguin holding two identical pastel pink keys upright beside its face.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F1EAFB"/>
+      <stop offset="1" stop-color="#D8C9EE"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#C5AAEF"/>
+      <stop offset="1" stop-color="#9B7DD0"/>
+    </linearGradient>
+    <linearGradient id="belly" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFBFF"/>
+      <stop offset="1" stop-color="#EFE5F8"/>
+    </linearGradient>
+    <linearGradient id="warm" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F7D584"/>
+      <stop offset="1" stop-color="#E8A95B"/>
+    </linearGradient>
+    <linearGradient id="keyFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F0ACC9"/>
+      <stop offset="0.5" stop-color="#DF7FB2"/>
+      <stop offset="1" stop-color="#C65C9A"/>
+    </linearGradient>
+    <g id="key">
+      <path d="M0-18A18 18 0 1 1 0 18A18 18 0 1 1 0-18ZM0-7A7 7 0 1 0 0 7A7 7 0 1 0 0-7Z" fill="url(#keyFill)" fill-rule="evenodd"/>
+      <path d="M14-7H54V7H44V18H34V7H26V16H18V7H14V-7Z" fill="url(#keyFill)"/>
+    </g>
+    <clipPath id="canvas">
+      <rect width="256" height="256" rx="56"/>
+    </clipPath>
+  </defs>
+
+  <rect width="256" height="256" rx="56" fill="url(#background)"/>
+  <rect x="1" y="1" width="254" height="254" rx="55" fill="none" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="2"/>
+
+  <g clip-path="url(#canvas)">
+    <path d="M128 30C170 30 215 65 225 150C230 190 225 260 225 260H31S26 190 31 150C41 65 86 30 128 30Z" fill="url(#body)"/>
+    <path d="M128 65C150 40 190 60 190 110C190 160 160 260 128 260C96 260 66 160 66 110C66 60 106 40 128 65Z" fill="url(#belly)"/>
+
+    <use href="#key" transform="translate(56 115) scale(-1 1) rotate(-80)"/>
+    <use href="#key" transform="translate(200 115) rotate(-80)"/>
+    <path d="M31 260C11 180 21 130 46 115C61 105 71 125 61 135C56 140 46 170 51 260H31Z" fill="url(#body)"/>
+    <path d="M225 260C245 180 235 130 210 115C195 105 185 125 195 135C200 140 210 170 205 260H225Z" fill="url(#body)"/>
+
+    <g fill="#47345E">
+      <circle cx="95" cy="95" r="10"/>
+      <circle cx="161" cy="95" r="10"/>
+    </g>
+    <g fill="#FFFFFF">
+      <circle cx="91" cy="91" r="3"/>
+      <circle cx="157" cy="91" r="3"/>
+    </g>
+    <path d="M108 115H148L128 140Z" fill="url(#warm)"/>
+    <path d="M116 118H140L128 134Z" fill="#FFF1B8" opacity="0.4"/>
+    <path d="M128 175C135 175 140 180 140 187C140 191 138 195 135 197L139 215H117L121 197C118 195 116 191 116 187C116 180 121 175 128 175Z" fill="#47345E" stroke="#E69ABF" stroke-width="1.5" stroke-linejoin="round"/>
+  </g>
+</svg>
