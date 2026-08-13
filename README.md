@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="WinCred Libsecret WSL Plugin logo" width="180">
+</p>
+
 # WinCred Libsecret WSL Plugin
 
 `wincred-libsecret-wsl-plugin` provides a Freedesktop Secret Service in WSL
