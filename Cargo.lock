@@ -1954,7 +1954,7 @@ dependencies = [
 
 [[package]]
 name = "wincred-libsecret"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1971,7 +1971,7 @@ dependencies = [
 
 [[package]]
 name = "wincred-libsecret-broker"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ciborium",
  "serde",
@@ -1986,7 +1986,7 @@ dependencies = [
 
 [[package]]
 name = "wincred-libsecret-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "ciborium",
@@ -2000,7 +2000,7 @@ dependencies = [
 
 [[package]]
 name = "wincred-libsecret-provider"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes",
  "async-trait",
@@ -2024,7 +2024,7 @@ dependencies = [
 
 [[package]]
 name = "wincred-libsecret-test-support"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "wincred-libsecret-protocol",
 ]

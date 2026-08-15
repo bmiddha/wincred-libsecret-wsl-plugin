@@ -3,6 +3,27 @@
 All notable changes to this project are documented here. This file is generated
 from [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org).
+## [0.2.0] ([compare](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/compare/v0.1.0...v0.2.0))
+
+### Features
+
+- *(installer)* Add CLI to machine PATH ([3665ab5](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/3665ab5e0602865bf41da9f64da6d19763a3381f))
+
+- *(installer)* Brand installed apps metadata ([39da348](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/39da348bf9059f4269e429d44417485b14e5ddd7))
+
+- *(cli)* Add release lifecycle management ([d9246e3](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/d9246e3984926cd0ad458282b5794d2b2f3f7151))
+
+
+### Bug fixes
+
+- *(linux)* Use supported interop unit condition ([bed8c4f](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/bed8c4fe1dd66d317c6e253c9d31dbdff4ad1923))
+
+- *(cli)* Clarify doctor diagnostics ([37f86d0](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/37f86d0958262e259d07051bef7f1ee09f175bca))
+
+- *(cli)* Clarify doctor diagnostics ([ea6523b](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/ea6523bb86c8856284aa5a45a96476035cb697b4))
+
+
+
 ## [0.1.0]
 
 ### Features
