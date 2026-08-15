@@ -91,6 +91,12 @@ Assert-True `
     ($releasePublisher.Contains("actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1")) `
     "Release publishing does not use the pinned GitHub App token action."
 Assert-True `
+    ($releasePublisher.Contains("permission-contents: write")) `
+    "Release publishing does not request the GitHub App Contents permission required to create tags."
+Assert-True `
+    ($releasePublisher.Contains("permission-workflows: write")) `
+    "Release publishing does not request the GitHub App Workflows permission required to create tags."
+Assert-True `
     ($releasePublisher.Contains("token: `${{ steps.app-token.outputs.token }}")) `
     "Release publishing does not authenticate checkout with the GitHub App token."
 
