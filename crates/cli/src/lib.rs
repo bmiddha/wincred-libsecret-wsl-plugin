@@ -5,6 +5,7 @@
 
 use std::cmp::Ordering;
 
+use semver::Version;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -136,6 +137,43 @@ pub enum EnablePlan {
     EnableOnly,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseCandidate {
+    pub tag_name: String,
+    pub draft: bool,
+    pub prerelease: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AvailableRelease {
+    pub tag_name: String,
+    pub version: Version,
+}
+
+#[must_use]
+pub fn newest_public_release(
+    releases: impl IntoIterator<Item = ReleaseCandidate>,
+    include_prereleases: bool,
+) -> Option<AvailableRelease> {
+    releases
+        .into_iter()
+        .filter(|release| !release.draft && (include_prereleases || !release.prerelease))
+        .filter_map(|release| {
+            let version_text = release
+                .tag_name
+                .strip_prefix('v')
+                .or_else(|| release.tag_name.strip_prefix('V'))
+                .unwrap_or(&release.tag_name);
+            Version::parse(version_text)
+                .ok()
+                .map(|version| AvailableRelease {
+                    tag_name: release.tag_name,
+                    version,
+                })
+        })
+        .max_by(|left, right| left.version.cmp(&right.version))
+}
+
 #[must_use]
 pub fn enable_plan(state: LifecycleState) -> EnablePlan {
     match state {
@@ -157,6 +195,7 @@ pub fn enable_plan(state: LifecycleState) -> EnablePlan {
 pub struct DoctorFinding {
     pub check: &'static str,
     pub ok: bool,
+    pub warning: bool,
     pub detail: String,
     pub remedy: Option<String>,
 }
@@ -167,8 +206,24 @@ impl DoctorFinding {
         Self {
             check,
             ok: true,
+            warning: false,
             detail: detail.into(),
             remedy: None,
+        }
+    }
+
+    #[must_use]
+    pub fn warning(
+        check: &'static str,
+        detail: impl Into<String>,
+        remedy: impl Into<String>,
+    ) -> Self {
+        Self {
+            check,
+            ok: true,
+            warning: true,
+            detail: detail.into(),
+            remedy: Some(remedy.into()),
         }
     }
 
@@ -177,6 +232,7 @@ impl DoctorFinding {
         Self {
             check,
             ok: false,
+            warning: false,
             detail: detail.into(),
             remedy: Some(remedy.into()),
         }
@@ -494,5 +550,62 @@ mod tests {
         assert!(!finding.ok);
         assert!(finding.remedy.unwrap().contains("wsl.conf"));
         assert!(!finding.detail.contains("password"));
+    }
+
+    #[test]
+    fn newest_release_excludes_drafts_and_prereleases_by_default() {
+        let releases = [
+            ReleaseCandidate {
+                tag_name: "v0.2.0".to_owned(),
+                draft: true,
+                prerelease: false,
+            },
+            ReleaseCandidate {
+                tag_name: "v0.1.1-beta.1".to_owned(),
+                draft: false,
+                prerelease: true,
+            },
+            ReleaseCandidate {
+                tag_name: "v0.1.0".to_owned(),
+                draft: false,
+                prerelease: false,
+            },
+            ReleaseCandidate {
+                tag_name: "v0.1.1".to_owned(),
+                draft: false,
+                prerelease: false,
+            },
+        ];
+
+        let latest = newest_public_release(releases, false).expect("a stable release");
+
+        assert_eq!(latest.tag_name, "v0.1.1");
+        assert_eq!(latest.version, Version::parse("0.1.1").unwrap());
+    }
+
+    #[test]
+    fn newest_release_includes_prereleases_when_requested() {
+        let releases = [
+            ReleaseCandidate {
+                tag_name: "v0.1.1".to_owned(),
+                draft: false,
+                prerelease: false,
+            },
+            ReleaseCandidate {
+                tag_name: "v0.2.0-rc.1".to_owned(),
+                draft: false,
+                prerelease: true,
+            },
+            ReleaseCandidate {
+                tag_name: "not-a-version".to_owned(),
+                draft: false,
+                prerelease: false,
+            },
+        ];
+
+        let latest = newest_public_release(releases, true).expect("a release");
+
+        assert_eq!(latest.tag_name, "v0.2.0-rc.1");
+        assert_eq!(latest.version, Version::parse("0.2.0-rc.1").unwrap());
     }
 }

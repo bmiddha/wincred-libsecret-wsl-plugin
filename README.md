@@ -16,7 +16,7 @@ do not call a project-specific Linux API.
 
 ## Install
 
-Open **PowerShell as Administrator** and run the public release installer:
+Open a non-elevated PowerShell session and run the public release installer:
 
 ```powershell
 $installer = Join-Path $env:TEMP 'wincred-libsecret-install.ps1'
@@ -26,14 +26,18 @@ Invoke-WebRequest `
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer
 ```
 
-It downloads the latest stable GitHub Release, verifies GitHub's asset digest
-and the release checksums, validates the Azure Artifact Signing metadata and
-the MSI Authenticode signature, and installs the MSI. To install a particular
-release, add `-Version`, for example:
+It requests elevation only to install the MSI. The elevated installer downloads
+the latest stable GitHub Release to protected staging, verifies GitHub's asset
+digest and the release checksums, and validates the Azure Artifact Signing
+metadata and MSI Authenticode signature. The original non-elevated session then
+refreshes enabled WSL distributions.
+To install a particular release, add `-Version`, for example:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -Version v0.1.0
 ```
+
+Pass `-IncludePrerelease` to select the newest published prerelease.
 
 The installer uses unauthenticated GitHub endpoints, so the selected release
 must be public. Azure Artifact Signing uses a standard Windows-trusted
@@ -68,14 +72,16 @@ printf 'hello' | secret-tool store --label='WinCred test' app wincred-test
 secret-tool lookup app wincred-test
 ```
 
-To remove the plugin and restore previous Secret Service definitions:
+To fully remove the plugin and restore previous Secret Service definitions,
+run this from a non-elevated PowerShell session:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\uninstall.ps1
+& $cli uninstall
 ```
 
-The uninstall command preserves secrets already stored in Windows Credential
-Manager.
+The uninstall command removes project-owned WSL provisioning and this user's
+enablement records before requesting elevation to remove the MSI. It preserves
+secrets already stored in Windows Credential Manager.
 
 ## Documentation
 
@@ -277,13 +283,17 @@ wincred-libsecret plugin install --dll <absolute-dll-path>
 wincred-libsecret plugin uninstall [--dll <absolute-dll-path>]
     [--restart-wslservice]
 wincred-libsecret plugin status
+wincred-libsecret upgrade [--include-prerelease]
+wincred-libsecret uninstall [--keep-distro-provisioning]
 
 wincred-libsecret distro enable <distro-name>
     [--payload-root <directory>] [--broker <absolute-exe-path>]
     [--replace-conflicts]
 wincred-libsecret distro disable <distro-name>
+wincred-libsecret distro refresh [<distro-name> | --all]
+    [--payload-root <directory>] [--broker <absolute-exe-path>]
 wincred-libsecret distro list
-wincred-libsecret doctor [--distro <distro-name>]
+wincred-libsecret doctor [--distro <distro-name>] [--include-prerelease]
 ```
 
 `plugin install` requires elevation, a real absolute DLL, and a `Valid`
@@ -291,6 +301,11 @@ Authenticode signature unless the explicit development-only override is
 given. `plugin uninstall --dll` removes the registry value only if it still
 names that DLL. The per-distro operations use the exact distribution name and
 support names with spaces.
+
+Run `upgrade` and `uninstall` from a non-elevated terminal. Each starts a
+packaged helper, then exits so Windows can replace or remove the running CLI;
+the helper requests elevation only for MSI work. Upgrade refreshes and
+validates enabled distro payloads after the MSI completes.
 
 The registry locations are deliberately narrow:
 
@@ -307,6 +322,8 @@ token; it does not use the LocalSystem user vault. `doctor` emits non-secret
 readiness findings for WSL version, plugin registration/path/signature, WSL 2
 state, enablement, systemd, D-Bus, interop, broker reachability, payload
 hashes, activation definitions, and ownership/modes.
+It also reports a newer public GitHub Release when one is available. A release
+lookup failure is a warning and does not suppress local diagnostic results.
 
 ## Using the Secret Service
 
@@ -366,11 +383,14 @@ The plugin logs failure operation/status pairs through ETW provider
 `TRUST_E_NOSIGNATURE`, service, systemd, D-Bus, interop, conflict, limit, and
 corrupt-generation recovery.
 
-To remove safely, first run `distro disable` for each enabled distribution so
-only project-owned files are removed and backed-up Secret Service definitions
-are restored. Then uninstall the MSI or unregister a tracked development DLL,
-restart `wslservice`, and remove the development certificate/state if used.
-Disabling and uninstalling do **not** delete the WinCred vault. Back up or
+To remove a release installation safely, run `wincred-libsecret uninstall`
+from a non-elevated PowerShell session. It disables every registered project
+distribution before MSI removal, restores backed-up Secret Service definitions,
+removes only project-owned enablement records, and preserves the WinCred vault.
+Use `--keep-distro-provisioning` only for a deliberate migration; otherwise it
+would leave Linux payloads that should be disabled before MSI removal. For a
+development registration, unregister the tracked development DLL, restart
+`wslservice`, and remove the development certificate/state if used. Back up or
 delete only the explicitly named project targets if complete credential-data
 removal is intended; see the complete-removal procedure in
 [Troubleshooting](docs/troubleshooting.md).

@@ -80,7 +80,20 @@ the repository-local tool manifest; it is not globally installed.
 
 ## MSI install, upgrade, repair, and uninstall
 
-Run MSI installation from an elevated session:
+Run the public installer from a non-elevated PowerShell session. It requests
+elevation only for MSI installation; the elevated helper downloads and verifies
+release checksums, GitHub asset digests, and the Authenticode signer in
+protected staging before invoking `msiexec`:
+
+```powershell
+.\install.ps1
+```
+
+To install a particular release, pass `-Version vX.Y.Z`. By default `latest`
+means the newest stable release; pass `-IncludePrerelease` to allow the newest
+published prerelease instead.
+
+Manual MSI installation also remains supported from an elevated session:
 
 ```powershell
 msiexec.exe /i .\wincred-libsecret-wsl-plugin.msi
@@ -105,16 +118,49 @@ installation.
 
 The MSI uses a stable UpgradeCode and a major-upgrade rule. Install a newer
 release with `msiexec.exe /i <new-msi>`; it upgrades the product and reruns
-the guarded registration. Repair with the normal Windows Installer repair
-flow or `msiexec.exe /fa <msi>`; repair invokes the registration action.
-After an install, repair, upgrade, or removal, restart `wslservice` or restart
-WSL before starting a new distribution. Use `plugin status` and `doctor` to
-confirm status.
+the guarded registration. The installed CLI provides the preferred
+self-upgrade path:
+
+```powershell
+wincred-libsecret upgrade
+wincred-libsecret upgrade --include-prerelease
+```
+
+Run `upgrade` from a non-elevated terminal. It starts the packaged, verified
+release installer, then exits so Windows can replace the running CLI. The
+installer waits for the CLI to exit, prompts for MSI elevation, and refreshes
+every enabled distribution from the new Windows payload, validating the Linux
+provider after each refresh. A manually installed newer MSI is also safe: the
+plugin refreshes each enabled distribution the next time it starts. Run
+`wincred-libsecret distro refresh --all` from a non-elevated terminal to
+perform and validate that refresh immediately. Repair with the normal Windows
+Installer repair flow or
+`msiexec.exe /fa <msi>`; repair invokes the registration action. After an
+install, repair, upgrade, or removal, restart `wslservice` or restart WSL
+before starting a new distribution. Use `plugin status` and `doctor` to confirm
+status.
 
 MSI removal unregisters only the matching DLL and removes its installed files.
 It also removes only the MSI's product-directory `PATH` entry.
-It does not remove per-distro provisioning or WinCred data. Disable each
-distro first as described below.
+For a full current-user cleanup, use the CLI from a non-elevated terminal
+instead of removing the product through Installed Apps:
+
+```powershell
+wincred-libsecret uninstall
+```
+
+The command disables every registered project distribution before it starts MSI
+removal, restores any project-backed foreign Secret Service definitions, removes
+only this project's HKCU enablement records, shuts down WSL, unregisters the
+matching plugin DLL, and removes the product `PATH` entry. It never deletes
+Windows Credential Manager data. `--keep-distro-provisioning` leaves enabled
+distribution payloads and registry records in place only for a deliberate
+manual migration; disable those distributions before later MSI removal.
+The command exits before MSI removal so Windows can release the running CLI;
+the packaged helper then requests elevation and reports the final result.
+The Windows Installed Apps uninstaller cannot safely operate on another
+user's HKCU and WSL state, so use the CLI cleanup path for every Windows user
+who enabled a distribution.
 
 ## Development signing lifecycle
 
@@ -180,6 +226,9 @@ $cli = '.\artifacts\Debug\windows\wincred-libsecret.exe'
   --broker .\artifacts\Debug\windows\wincred-libsecret-broker.exe
 & $cli distro list
 & $cli doctor --distro <distro-name>
+& $cli distro refresh --all `
+  --payload-root .\artifacts\Debug\linux `
+  --broker .\artifacts\Debug\windows\wincred-libsecret-broker.exe
 & $cli distro disable <distro-name>
 ```
 
@@ -239,12 +288,18 @@ Run:
 & $cli plugin status
 & $cli distro list
 & $cli doctor --distro <distro-name>
+& $cli doctor --include-prerelease
 ```
 
 The Linux helper supports `--status`, `--doctor`, `--refresh`, and `--disable`
 when run as root. It checks provisioning state, foreign conflicts,
 architecture, systemd, user D-Bus availability, Windows interop, broker
 reachability, payload hashes, activation files, and exact modes.
+
+`doctor` also compares the installed CLI version with the newest public GitHub
+Release. It reports an available update with the matching `upgrade` command;
+a release API timeout or unavailable network is a warning and does not hide
+local diagnostic failures.
 
 Use `journalctl --user -u wincred-libsecret.service` for provider logs and
 `journalctl -u wincred-libsecret-refresh.service` for refresh logs. The DLL
