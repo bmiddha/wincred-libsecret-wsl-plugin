@@ -13,8 +13,9 @@ keeping the high-cost full E2E path out of the normal component CI matrix.
 
 The workflow caches two safe, reproducible inputs:
 
-- Windows Cargo registry, Git dependencies, and `target`, keyed by the lockfile
-  and Rust toolchain;
+- Windows Cargo dependencies and Rust dependency build outputs through
+  `Swatinem/rust-cache`, isolated by the Windows image, Rust toolchain, host
+  target, and Cargo environment;
 - a WSL source-rootfs tarball keyed by its bootstrap script, lockfile, and
   Rust toolchain.
 

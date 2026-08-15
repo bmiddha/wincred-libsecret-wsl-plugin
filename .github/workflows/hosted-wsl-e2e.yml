@@ -38,14 +38,6 @@ jobs:
           clean: true
           fetch-depth: 1
           ref: ${{ inputs.checkout_ref || github.sha }}
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~\.cargo\registry
-            ~\.cargo\git
-            target
-          key: hosted-wsl-e2e-windows-cargo-1.97.1-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: hosted-wsl-e2e-windows-cargo-1.97.1-
       - id: wsl-rootfs
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -64,6 +56,10 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
           rustup default 1.97.1
           if ((rustc --version) -notmatch '1\.97\.1') { throw 'Rust 1.97.1 was not selected.' }
+      - name: Restore Rust compilation and Cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: windows-2025-rust-1.97.1-x86_64-pc-windows-msvc
       - name: Prepare cached WSL 2 source distribution
         env:
           WSL_SOURCE_ROOT: ${{ runner.temp }}\wincred-wsl-e2e\source

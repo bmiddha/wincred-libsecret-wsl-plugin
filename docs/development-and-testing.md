@@ -138,8 +138,9 @@ CI covers Windows formatting/tests/Clippy/CMake/CTest, Linux
 formatting/tests/Clippy/musl provider build, and D-Bus integration where a
 session bus exists. The full privileged E2E uses the weekly or manually
 dispatched GitHub-hosted Windows 2025 workflow rather than consuming Windows
-minutes on every pull request. It caches Windows Cargo inputs and a pre-test
-WSL rootfs; see [the hosted E2E runner](../.github/HOSTED_WSL_E2E.md).
+minutes on every pull request. It uses an isolated Windows Cargo and Rust
+dependency-compilation cache plus a pre-test WSL rootfs; see
+[the hosted E2E runner](../.github/HOSTED_WSL_E2E.md).
 Pull requests limited to documentation, branding assets, legal/community
 files, or approved repository metadata run only the lightweight change-scope
 validation; they skip the build matrix and CodeQL analysis. Source,
