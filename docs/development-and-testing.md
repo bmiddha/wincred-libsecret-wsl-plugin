@@ -186,8 +186,8 @@ non-conventional history under an "Other changes" section for the initial
 release. Add both Conventional Commits checks to the required checks for
 `main`; defining the workflow alone does not prevent an invalid PR merge.
 
-The repository needs a GitHub App installed with Contents, Pull requests, and
-Issues read/write permission, plus `RELEASE_APP_ID` and
+The repository needs a GitHub App installed with Contents, Pull requests,
+Issues, and Workflows read/write permission, plus `RELEASE_APP_ID` and
 `RELEASE_APP_PRIVATE_KEY` repository secrets. Create an Azure Artifact Signing
 account and code-signing certificate profile in its supported region. Create a
 protected GitHub `release` environment and configure these GitHub environment
