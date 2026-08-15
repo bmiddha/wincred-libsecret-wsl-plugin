@@ -74,9 +74,14 @@ jobs:
     timeout-minutes: 65
     permissions:
       actions: read
+      contents: read
     outputs:
       run_id: ${{ steps.find.outputs.run_id }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
       - name: Wait for successful CI on the release commit
         id: find
         shell: bash
