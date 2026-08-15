@@ -194,16 +194,23 @@ variables:
 | `AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME` | Artifact Signing account name |
 | `AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME` | Code-signing certificate profile name |
 
-Create a Microsoft Entra application and federated credential with issuer
+This repository's shared release identity is provisioned by the homelab
+Artifact Signing stack. Its federated credential uses issuer
 `https://token.actions.githubusercontent.com`, audience
-`api://AzureADTokenExchange`, and subject
-`repo:bmiddha/wincred-libsecret-wsl-plugin:environment:release`. Assign that
-service principal the **Artifact Signing Certificate Profile Signer** role on
-the account, resource group, or subscription. The release workflow exchanges
-its GitHub OIDC token through `azure/login`, then Azure Artifact Signing signs
-the staged DLL/EXEs before WiX builds the MSI and signs the completed MSI
-afterward. No long-lived signing PFX or Azure client secret is stored in
-GitHub.
+`api://AzureADTokenExchange`, and the exact default GitHub OIDC subject:
+
+```text
+repo:bmiddha@5100938/wincred-libsecret-wsl-plugin@1334818618:environment:release
+```
+
+Keep GitHub's default OIDC subject template and use an exact immutable subject
+for every approved repository/environment; Microsoft Entra does not support
+wildcard federated-credential subjects. The shared identity has the
+**Artifact Signing Certificate Profile Signer** role at the certificate
+profile scope. The release workflow exchanges its GitHub OIDC token through
+`azure/login`, then Azure Artifact Signing signs the staged DLL/EXEs before
+WiX builds the MSI and signs the completed MSI afterward. No long-lived
+signing PFX or Azure client secret is stored in GitHub.
 
 When the repository is public, the publisher also creates GitHub artifact
 attestations for every release asset. Checksums and Authenticode signatures
