@@ -170,6 +170,23 @@ Assert-True `
 $releasePublishWorkflow = Get-Content `
     -LiteralPath (Join-Path $repositoryRoot ".github\workflows\release-publish.yml") `
     -Raw
+$releaseWaitCiJob = [regex]::Match(
+    $releasePublishWorkflow,
+    '(?ms)^  wait-ci:\r?\n(?<body>.*?)(?=^  \S|\z)'
+)
+Assert-True `
+    $releaseWaitCiJob.Success `
+    "Release publish must retain its merge-CI gate."
+$releaseWaitCiBody = $releaseWaitCiJob.Groups["body"].Value
+Assert-True `
+    ($releaseWaitCiBody -match '(?m)^    permissions:\r?\n      actions: read\r?\n      contents: read\r?$') `
+    "Release publish must grant the merge-CI gate permission to check out its tracked helper."
+Assert-True `
+    ($releaseWaitCiBody.Contains("uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")) `
+    "Release publish must check out the tracked merge-CI helper."
+Assert-True `
+    ($releaseWaitCiBody.Contains("bash scripts/release/wait-for-merge-ci.sh")) `
+    "Release publish must run the tracked merge-CI helper."
 $releaseHostedE2eJob = [regex]::Match(
     $releasePublishWorkflow,
     '(?ms)^  hosted-e2e:\r?\n(?<body>.*?)(?=^  \S|\z)'
