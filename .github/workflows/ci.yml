@@ -18,8 +18,28 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
+  change-scope:
+    name: Classify validation scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      requires_full_validation: ${{ steps.scope.outputs.requires_full_validation }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Validate change-scope classifier
+        shell: pwsh
+        run: .\scripts\Test-CiChangeScope.ps1
+      - name: Classify changed paths
+        id: scope
+        shell: pwsh
+        run: .\scripts\Get-CiChangeScope.ps1 -WriteGitHubOutput
+
   windows:
     name: Windows Rust, native, and WinCred
+    needs: change-scope
+    if: needs.change-scope.outputs.requires_full_validation == 'true'
     runs-on: windows-2022
     timeout-minutes: 45
     steps:
@@ -59,6 +79,8 @@ jobs:
 
   ubuntu:
     name: Ubuntu provider and D-Bus contract
+    needs: change-scope
+    if: needs.change-scope.outputs.requires_full_validation == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
@@ -120,7 +142,12 @@ jobs:
 
   package:
     name: Assemble and validate signed-layout MSI
-    needs: [windows, ubuntu]
+    needs: [change-scope, windows, ubuntu]
+    if: >-
+      always() &&
+      needs.change-scope.outputs.requires_full_validation == 'true' &&
+      needs.windows.result == 'success' &&
+      needs.ubuntu.result == 'success'
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
@@ -156,6 +183,8 @@ jobs:
 
   dependency-security:
     name: Cargo advisory and license policy
+    needs: change-scope
+    if: needs.change-scope.outputs.requires_full_validation == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:

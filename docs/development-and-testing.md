@@ -140,6 +140,12 @@ session bus exists. The full privileged E2E uses the weekly or manually
 dispatched GitHub-hosted Windows 2025 workflow rather than consuming Windows
 minutes on every pull request. It caches Windows Cargo inputs and a pre-test
 WSL rootfs; see [the hosted E2E runner](../.github/HOSTED_WSL_E2E.md).
+Pull requests limited to documentation, branding assets, legal/community
+files, or approved repository metadata run only the lightweight change-scope
+validation; they skip the build matrix and CodeQL analysis. Source,
+dependencies, packaging, build-system, workflow, and unrecognized file
+changes remain on the complete validation path. Pushes to `main` and manual
+CI runs always use the complete path.
 CodeQL runs automatically when the repository is public. Before publication,
 enable GitHub Code Security and set the `CODEQL_ENABLED` repository variable
 to `true` on a supported plan; until then the workflow records a successful

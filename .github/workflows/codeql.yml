@@ -18,8 +18,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  change-scope:
+    name: Classify validation scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      requires_full_validation: ${{ steps.scope.outputs.requires_full_validation }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Validate change-scope classifier
+        shell: pwsh
+        run: .\scripts\Test-CiChangeScope.ps1
+      - name: Classify changed paths
+        id: scope
+        shell: pwsh
+        run: .\scripts\Get-CiChangeScope.ps1 -WriteGitHubOutput
+
   analyze:
-    if: github.event.repository.visibility == 'public' || vars.CODEQL_ENABLED == 'true'
+    needs: change-scope
+    if: >-
+      needs.change-scope.outputs.requires_full_validation == 'true' &&
+      (github.event.repository.visibility == 'public' || vars.CODEQL_ENABLED == 'true')
     name: Analyze ${{ matrix.language }}
     runs-on: windows-2022
     timeout-minutes: 45
@@ -66,14 +87,24 @@ jobs:
   availability:
     if: always()
     name: CodeQL availability
-    needs: analyze
+    needs: [change-scope, analyze]
     runs-on: ubuntu-24.04
     steps:
       - name: Report CodeQL status
         shell: bash
         env:
+          CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}
+          REQUIRES_FULL_VALIDATION: ${{ needs.change-scope.outputs.requires_full_validation }}
           ANALYZE_RESULT: ${{ needs.analyze.result }}
         run: |
+          if [[ "$CHANGE_SCOPE_RESULT" != "success" ]]; then
+            echo "::error::Change-scope classification concluded '$CHANGE_SCOPE_RESULT'."
+            exit 1
+          fi
+          if [[ "$REQUIRES_FULL_VALIDATION" != "true" ]]; then
+            echo "CodeQL skipped because this pull request changes only documentation or repository metadata."
+            exit 0
+          fi
           case "$ANALYZE_RESULT" in
             success)
               echo "CodeQL analysis completed successfully."
