@@ -149,6 +149,9 @@ changes remain on the complete validation path. Pushes to `main` and manual
 CI runs always use the complete path. Each `main` commit has an independent
 CI and CodeQL concurrency group, so a later merge cannot cancel its full
 validation run.
+The lightweight validation also parses tracked PowerShell workflow helpers,
+runs `bash -n` on tracked shell helpers, and compiles tracked Python helpers
+without running a product build.
 CodeQL runs automatically when the repository is public. Before publication,
 enable GitHub Code Security and set the `CODEQL_ENABLED` repository variable
 to `true` on a supported plan; until then the workflow records a successful

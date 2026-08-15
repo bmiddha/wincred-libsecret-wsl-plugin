@@ -79,7 +79,28 @@ foreach ($workflowName in @("ci.yml", "codeql.yml"))
     Assert-True `
         ($workflow.Contains($pullRequestCancellation)) `
         "$workflowName does not limit cancellation to pull request updates."
+    Assert-True `
+        ($workflow.Contains(".\scripts\Test-WorkflowScripts.ps1")) `
+        "$workflowName does not run tracked workflow script syntax validation."
 }
+
+$codeqlWorkflow = Get-Content `
+    -LiteralPath (Join-Path $repositoryRoot ".github\workflows\codeql.yml") `
+    -Raw
+$codeqlAvailabilityJob = [regex]::Match(
+    $codeqlWorkflow,
+    '(?ms)^  availability:\r?\n(?<body>.*?)(?=^  \S|\z)'
+)
+Assert-True `
+    $codeqlAvailabilityJob.Success `
+    "CodeQL must retain its availability job."
+$codeqlAvailabilityBody = $codeqlAvailabilityJob.Groups["body"].Value
+Assert-True `
+    ($codeqlAvailabilityBody.Contains("uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")) `
+    "CodeQL availability must check out the tracked status-reporting script."
+Assert-True `
+    ($codeqlAvailabilityBody.Contains("bash scripts/ci/write-codeql-availability.sh")) `
+    "CodeQL availability must run the tracked status-reporting script."
 
 $releasePublisher = Get-Content `
     -LiteralPath (Join-Path $repositoryRoot ".github\workflows\release-publish.yml") `

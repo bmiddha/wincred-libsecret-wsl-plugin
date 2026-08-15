@@ -96,21 +96,10 @@ jobs:
         if: always()
         env:
           WSL_SOURCE_ROOT: ${{ runner.temp }}\wincred-wsl-e2e\source
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & wsl.exe --shutdown
-          if ($LASTEXITCODE -ne 0) { throw "wsl.exe --shutdown exited with $LASTEXITCODE." }
-          $distributions = @(& wsl.exe --list --quiet 2>&1 | ForEach-Object {
-            ([string]$_).Replace([string][char]0, "").Trim([char]0xFEFF, " ", "`t", "`r")
-          } | Where-Object { $_ })
-          if ($LASTEXITCODE -ne 0) { throw "wsl.exe --list --quiet exited with $LASTEXITCODE." }
-          if ($distributions -contains $env:WSL_SOURCE_DISTRO) {
-            & wsl.exe --unregister $env:WSL_SOURCE_DISTRO
-            if ($LASTEXITCODE -ne 0) { throw "wsl.exe --unregister exited with $LASTEXITCODE." }
-          }
-          if (Test-Path -LiteralPath $env:WSL_SOURCE_ROOT) {
-            Remove-Item -LiteralPath $env:WSL_SOURCE_ROOT -Recurse -Force
-          }
+        run: >-
+          .\scripts\Remove-HostedWslE2ESource.ps1
+          -SourceDistribution $env:WSL_SOURCE_DISTRO
+          -SourceRoot $env:WSL_SOURCE_ROOT
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

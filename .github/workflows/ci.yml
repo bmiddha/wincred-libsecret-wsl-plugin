@@ -31,6 +31,9 @@ jobs:
       - name: Validate change-scope classifier
         shell: pwsh
         run: .\scripts\Test-CiChangeScope.ps1
+      - name: Validate tracked workflow scripts
+        shell: pwsh
+        run: .\scripts\Test-WorkflowScripts.ps1
       - name: Classify changed paths
         id: scope
         shell: pwsh
@@ -92,15 +95,7 @@ jobs:
           fetch-depth: 0
       - name: Install Linux test prerequisites
         shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends \
-            build-essential dbus dbus-user-session libsecret-1-dev libsecret-tools \
-            musl-tools pkg-config
-          command -v dbus-run-session
-          command -v secret-tool
-          pkg-config --exists libsecret-1
+        run: bash scripts/ci/install-linux-test-prerequisites.sh
       - name: Install pinned Rust and musl target
         shell: bash
         run: |
