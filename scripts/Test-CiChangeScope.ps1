@@ -5,6 +5,17 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $scopeScript = Join-Path $PSScriptRoot "Get-CiChangeScope.ps1"
+$repositoryRoot = Split-Path -Parent $PSScriptRoot
+
+function Assert-True
+{
+    param([bool]$Condition, [string]$Message)
+
+    if (!$Condition)
+    {
+        throw $Message
+    }
+}
 
 function Assert-ValidationScope
 {
@@ -54,5 +65,20 @@ Assert-ValidationScope `
     -Name "Empty change sets" `
     -ChangedPath ([string[]]@()) `
     -Expected "true"
+
+$pushGroupFragment = 'github.event_name == ''push'' && github.sha || github.ref'
+$pullRequestCancellation = 'cancel-in-progress: ${{ github.event_name == ''pull_request'' }}'
+foreach ($workflowName in @("ci.yml", "codeql.yml"))
+{
+    $workflow = Get-Content `
+        -LiteralPath (Join-Path $repositoryRoot ".github\workflows\$workflowName") `
+        -Raw
+    Assert-True `
+        ($workflow.Contains($pushGroupFragment)) `
+        "$workflowName does not use a commit-specific concurrency group for main pushes."
+    Assert-True `
+        ($workflow.Contains($pullRequestCancellation)) `
+        "$workflowName does not limit cancellation to pull request updates."
+}
 
 Write-Host "CI change-scope validation passed."

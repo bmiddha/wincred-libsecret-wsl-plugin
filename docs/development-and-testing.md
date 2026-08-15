@@ -145,7 +145,9 @@ files, or approved repository metadata run only the lightweight change-scope
 validation; they skip the build matrix and CodeQL analysis. Source,
 dependencies, packaging, build-system, workflow, and unrecognized file
 changes remain on the complete validation path. Pushes to `main` and manual
-CI runs always use the complete path.
+CI runs always use the complete path. Each `main` commit has an independent
+CI and CodeQL concurrency group, so a later merge cannot cancel its full
+validation run.
 CodeQL runs automatically when the repository is public. Before publication,
 enable GitHub Code Security and set the `CODEQL_ENABLED` repository variable
 to `true` on a supported plan; until then the workflow records a successful
