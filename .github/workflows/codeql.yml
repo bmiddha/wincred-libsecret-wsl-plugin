@@ -1,0 +1,88 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    if: github.event.repository.visibility == 'public' || vars.CODEQL_ENABLED == 'true'
+    name: Analyze ${{ matrix.language }}
+    runs-on: windows-2022
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: c-cpp
+            build-mode: manual
+          - language: rust
+            build-mode: none
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-extended,security-and-quality
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+      - name: Build native code for C/C++ analysis
+        if: matrix.language == 'c-cpp'
+        shell: pwsh
+        run: |
+          cargo build --locked --workspace --exclude wincred-libsecret-provider
+          . .\scripts\VisualStudio.ps1
+          $installationPath = Import-VisualStudioEnvironment
+          $cmake = Join-Path $installationPath 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
+          & $cmake --preset windows-x64
+          if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed.' }
+          & $cmake --build --preset windows-x64-release
+          if ($LASTEXITCODE -ne 0) { throw 'Native build failed.' }
+      - name: Analyze database
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          category: /language:${{ matrix.language }}
+
+  availability:
+    if: always()
+    name: CodeQL availability
+    needs: analyze
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Report CodeQL status
+        shell: bash
+        env:
+          ANALYZE_RESULT: ${{ needs.analyze.result }}
+        run: |
+          case "$ANALYZE_RESULT" in
+            success)
+              echo "CodeQL analysis completed successfully."
+              ;;
+            skipped)
+              echo "::notice title=CodeQL is not enabled::CodeQL runs automatically when this repository is public. Before publication, enable Code Security and set CODEQL_ENABLED to true on a supported plan."
+              ;;
+            *)
+              echo "::error::CodeQL analysis concluded '$ANALYZE_RESULT'."
+              exit 1
+              ;;
+          esac

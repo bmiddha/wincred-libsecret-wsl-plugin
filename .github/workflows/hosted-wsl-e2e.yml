@@ -1,0 +1,123 @@
+name: Hosted WSL E2E
+run-name: Hosted WSL E2E (${{ github.event_name }})
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: Immutable source revision to validate
+        required: false
+        type: string
+  schedule:
+    - cron: "17 4 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosted-wsl-e2e-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  WSL_SOURCE_DISTRO: wincred-e2e-source
+
+jobs:
+  e2e:
+    if: github.event.repository.fork == false
+    runs-on: windows-2025
+    timeout-minutes: 70
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          clean: true
+          fetch-depth: 1
+          ref: ${{ inputs.checkout_ref || github.sha }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+            target
+          key: hosted-wsl-e2e-windows-cargo-1.97.1-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: hosted-wsl-e2e-windows-cargo-1.97.1-
+      - id: wsl-rootfs
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}\wincred-wsl-e2e\ubuntu-24.04-rootfs.tar
+          key: hosted-wsl-e2e-rootfs-v3-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'scripts/Initialize-HostedWslE2E.ps1') }}
+      - name: Verify hosted Windows VM privileges
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'The GitHub-hosted Windows VM must provide an elevated runner token.'
+          }
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.1
+          if ((rustc --version) -notmatch '1\.97\.1') { throw 'Rust 1.97.1 was not selected.' }
+      - name: Prepare cached WSL 2 source distribution
+        env:
+          WSL_SOURCE_ROOT: ${{ runner.temp }}\wincred-wsl-e2e\source
+          WSL_ROOTFS: ${{ runner.temp }}\wincred-wsl-e2e\ubuntu-24.04-rootfs.tar
+        run: |
+          .\scripts\Initialize-HostedWslE2E.ps1 `
+            -SourceDistribution $env:WSL_SOURCE_DISTRO `
+            -RepositoryRoot $env:GITHUB_WORKSPACE `
+            -InstallRoot $env:WSL_SOURCE_ROOT `
+            -RootfsPath $env:WSL_ROOTFS
+      - name: Save cached WSL 2 source rootfs
+        if: steps.wsl-rootfs.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}\wincred-wsl-e2e\ubuntu-24.04-rootfs.tar
+          key: ${{ steps.wsl-rootfs.outputs.cache-primary-key }}
+      - name: Run non-skippable hosted WSL E2E
+        env:
+          WSL_ROOTFS: ${{ runner.temp }}\wincred-wsl-e2e\ubuntu-24.04-rootfs.tar
+        run: |
+          .\scripts\run-e2e.ps1 -Full -RequireFull `
+            -WslSourceDistro $env:WSL_SOURCE_DISTRO `
+            -RootfsPath $env:WSL_ROOTFS
+      - name: Verify post-cleanup state
+        if: always()
+        run: |
+          if (Test-Path -LiteralPath .\test-results\e2e -PathType Container) {
+            .\scripts\Test-E2ECleanup.ps1
+          } else {
+            Write-Warning 'The E2E harness did not create a result directory, so there is no cleanup report to verify.'
+          }
+      - name: Remove hosted WSL source distribution
+        if: always()
+        env:
+          WSL_SOURCE_ROOT: ${{ runner.temp }}\wincred-wsl-e2e\source
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & wsl.exe --shutdown
+          if ($LASTEXITCODE -ne 0) { throw "wsl.exe --shutdown exited with $LASTEXITCODE." }
+          $distributions = @(& wsl.exe --list --quiet 2>&1 | ForEach-Object {
+            ([string]$_).Replace([string][char]0, "").Trim([char]0xFEFF, " ", "`t", "`r")
+          } | Where-Object { $_ })
+          if ($LASTEXITCODE -ne 0) { throw "wsl.exe --list --quiet exited with $LASTEXITCODE." }
+          if ($distributions -contains $env:WSL_SOURCE_DISTRO) {
+            & wsl.exe --unregister $env:WSL_SOURCE_DISTRO
+            if ($LASTEXITCODE -ne 0) { throw "wsl.exe --unregister exited with $LASTEXITCODE." }
+          }
+          if (Test-Path -LiteralPath $env:WSL_SOURCE_ROOT) {
+            Remove-Item -LiteralPath $env:WSL_SOURCE_ROOT -Recurse -Force
+          }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: hosted-wsl-e2e-results
+          path: test-results/e2e
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,38 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# CMake and Visual Studio
+/build/
+/out/
+/.vs/
+CMakeUserPresets.json
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# Packaging and signing
+/artifacts/
+/packages/
+/.ci-secrets/
+/packaging/wix/bin/
+/packaging/wix/obj/
+*.cer
+*.pfx
+*.p12
+*.msi
+*.wixpdb
+
+# Test output
+/test-results/
+*.log
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini

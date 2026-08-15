@@ -1,0 +1,27 @@
+[package]
+name = "wincred-libsecret-broker"
+description = "Windows Credential Manager broker for WSL Secret Service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wincred-libsecret-broker"
+path = "src/main.rs"
+
+[dependencies]
+ciborium.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["io-std"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+wincred-libsecret-protocol = { path = "../protocol" }
+zeroize.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+[lints]
+workspace = true

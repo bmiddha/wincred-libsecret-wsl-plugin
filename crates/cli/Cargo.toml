@@ -1,0 +1,23 @@
+[package]
+name = "wincred-libsecret"
+description = "Management CLI for wincred-libsecret-wsl-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wincred-libsecret"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+sha2 = "0.11.0"
+thiserror.workspace = true
+uuid.workspace = true
+wincred-libsecret-protocol = { path = "../protocol" }
+winreg = "0.56.0"
+
+[lints]
+workspace = true

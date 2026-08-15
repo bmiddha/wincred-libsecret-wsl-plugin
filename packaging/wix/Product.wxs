@@ -1,0 +1,114 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="WinCred Libsecret WSL Plugin"
+      Manufacturer="wincred-libsecret-wsl-plugin contributors"
+      Version="$(var.ProductVersion)"
+      UpgradeCode="{A81A96E1-14E9-43F8-BAE1-7C88BE7A6B5C}"
+      Language="1033"
+      Scope="perMachine">
+    <MajorUpgrade
+        Schedule="afterInstallInitialize"
+        DowngradeErrorMessage="A newer version of WinCred Libsecret WSL Plugin is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Property Id="ARPCONTACT" Value="wincred-libsecret-wsl-plugin contributors" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/wincred-libsecret-wsl-plugin/wincred-libsecret-wsl-plugin" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/wincred-libsecret-wsl-plugin/wincred-libsecret-wsl-plugin/issues" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="SKIPPLUGINREGISTRATION" Secure="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="WinCredLibsecret">
+        <Component Id="PluginBinaryComponent" Guid="{86C3E780-770B-4775-8521-EC2B3A99E812}" Bitness="always64">
+          <File Id="PluginDll" Source="$(var.SourceDir)\windows\wincred-libsecret-wsl-plugin.dll" KeyPath="yes" />
+        </Component>
+        <Component Id="CommandBinariesComponent" Guid="{6D0134A8-7BF4-4287-A147-DB907A6DB083}" Bitness="always64">
+          <File Id="WincredCli" Source="$(var.SourceDir)\windows\wincred-libsecret.exe" KeyPath="yes" />
+          <File Id="BrokerExe" Source="$(var.SourceDir)\windows\wincred-libsecret-broker.exe" />
+        </Component>
+        <Directory Id="LINUXPAYLOADDIR" Name="linux">
+          <Component Id="LinuxProviderComponent" Guid="{4843FB32-C6CE-46B4-BE31-AF1A5D4E2F8A}" Bitness="always64">
+            <File Id="LinuxProvider" Source="$(var.SourceDir)\linux\wincred-libsecret-provider" KeyPath="yes" />
+          </Component>
+          <Component Id="LinuxTemplatesComponent" Guid="{D0F7BA9B-8BF5-4163-B70B-58E0460B5AA2}" Bitness="always64">
+            <File Id="LinuxDbusService" Source="$(var.SourceDir)\linux\org.freedesktop.secrets.service" KeyPath="yes" />
+            <File Id="LinuxBootstrap" Source="$(var.SourceDir)\linux\wincred-libsecret-bootstrap.sh" />
+            <File Id="LinuxService" Source="$(var.SourceDir)\linux\wincred-libsecret.service" />
+            <File Id="LinuxRefreshService" Source="$(var.SourceDir)\linux\wincred-libsecret-refresh.service" />
+            <File Id="LinuxInteropService" Source="$(var.SourceDir)\linux\wincred-libsecret-interop.service" />
+            <File Id="LinuxPayloadManifest" Source="$(var.SourceDir)\linux\manifest.sha256" />
+          </Component>
+        </Directory>
+        <Directory Id="SYMBOLSDIR" Name="symbols">
+          <Component Id="SymbolsComponent" Guid="{F462CF31-39FD-483A-820C-2A8B1264B905}" Bitness="always64">
+            <File Id="PluginPdb" Source="$(var.SourceDir)\symbols\wincred-libsecret-wsl-plugin.pdb" KeyPath="yes" />
+            <File Id="CliPdb" Source="$(var.SourceDir)\symbols\wincred-libsecret.pdb" />
+            <File Id="BrokerPdb" Source="$(var.SourceDir)\symbols\wincred-libsecret-broker.pdb" />
+          </Component>
+        </Directory>
+        <Directory Id="METADATADIR" Name="metadata">
+          <Component Id="ReleaseMetadataComponent" Guid="{BF4D4A6A-66CA-4789-BFE0-E1B36AF2541F}" Bitness="always64">
+            <File Id="VersionManifest" Source="$(var.SourceDir)\metadata\version-manifest.json" KeyPath="yes" />
+            <File Id="DependencyMetadata" Source="$(var.SourceDir)\metadata\dependency-metadata.json" />
+            <File Id="Checksums" Source="$(var.SourceDir)\metadata\checksums.sha256" />
+          </Component>
+        </Directory>
+        <Directory Id="LICENSESDIR" Name="licenses">
+          <Component Id="LicenseComponent" Guid="{F5A5C3D2-9ACD-45E4-98A6-CFF878FC9199}" Bitness="always64">
+            <File Id="LicenseText" Source="$(var.SourceDir)\licenses\LICENSE.txt" KeyPath="yes" />
+            <File Id="NoticeText" Source="$(var.SourceDir)\licenses\NOTICE.txt" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Complete" Title="WinCred Libsecret WSL Plugin" Level="1">
+      <ComponentRef Id="PluginBinaryComponent" />
+      <ComponentRef Id="CommandBinariesComponent" />
+      <ComponentRef Id="LinuxProviderComponent" />
+      <ComponentRef Id="LinuxTemplatesComponent" />
+      <ComponentRef Id="SymbolsComponent" />
+      <ComponentRef Id="ReleaseMetadataComponent" />
+      <ComponentRef Id="LicenseComponent" />
+    </Feature>
+
+    <!--
+      The CLI owns HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss\Plugins
+      value wincred-libsecret-wsl-plugin. A Registry table row would remove a
+      value changed after installation, so guarded custom actions are required.
+    -->
+    <CustomAction
+        Id="RollbackPluginRegistration"
+        FileRef="WincredCli"
+        ExeCommand='plugin uninstall --dll "[#PluginDll]"'
+        Execute="rollback"
+        Return="ignore"
+        Impersonate="no" />
+    <CustomAction
+        Id="RegisterPlugin"
+        FileRef="WincredCli"
+        ExeCommand='plugin install --dll "[#PluginDll]"'
+        Execute="deferred"
+        Return="check"
+        Impersonate="no" />
+    <CustomAction
+        Id="UnregisterPlugin"
+        FileRef="WincredCli"
+        ExeCommand='plugin uninstall --dll "[#PluginDll]"'
+        Execute="deferred"
+        Return="check"
+        Impersonate="no" />
+
+    <InstallExecuteSequence>
+      <Custom
+          Action="RollbackPluginRegistration"
+          After="InstallFiles"
+          Condition="NOT SKIPPLUGINREGISTRATION AND NOT Installed" />
+      <Custom
+          Action="RegisterPlugin"
+          After="RollbackPluginRegistration"
+          Condition="NOT SKIPPLUGINREGISTRATION AND (NOT Installed OR REINSTALL)" />
+      <Custom Action="UnregisterPlugin" Before="RemoveFiles" Condition='REMOVE="ALL"' />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

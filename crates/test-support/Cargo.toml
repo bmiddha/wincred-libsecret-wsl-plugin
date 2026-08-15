@@ -1,0 +1,14 @@
+[package]
+name = "wincred-libsecret-test-support"
+description = "Shared test utilities for wincred-libsecret-wsl-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+wincred-libsecret-protocol = { path = "../protocol" }
+
+[lints]
+workspace = true

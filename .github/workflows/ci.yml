@@ -1,0 +1,180 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  windows:
+    name: Windows Rust, native, and WinCred
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+            target
+          key: windows-cargo-1.97.1-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: windows-cargo-1.97.1-
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.1
+          if ((rustc --version) -notmatch '1\.97\.1') { throw 'Rust 1.97.1 was not selected.' }
+      - name: Validate Rust, CMake, CTest, and live WinCred
+        shell: pwsh
+        run: .\test.ps1 -Configuration Debug -RunWinCredLive
+      - name: Assemble reproducible Windows release inputs
+        shell: pwsh
+        run: |
+          $env:SOURCE_DATE_EPOCH = (git log -1 --format=%ct).Trim()
+          .\scripts\build.ps1 -Configuration Release -SkipLinux -Clean
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-release
+          path: |
+            artifacts/Release/windows
+            artifacts/Release/symbols
+          if-no-files-found: error
+          retention-days: 30
+
+  ubuntu:
+    name: Ubuntu provider and D-Bus contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install Linux test prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential dbus dbus-user-session libsecret-1-dev libsecret-tools \
+            musl-tools pkg-config
+          command -v dbus-run-session
+          command -v secret-tool
+          pkg-config --exists libsecret-1
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-cargo-1.97.1-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: ubuntu-cargo-1.97.1-
+      - name: Install pinned Rust and musl target
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.1
+          rustup target add x86_64-unknown-linux-musl --toolchain 1.97.1
+          rustc --version | grep -F '1.97.1'
+      - name: Validate shell contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n packaging/linux/wincred-libsecret-bootstrap.sh scripts/build-linux.sh scripts/test-linux.sh tests/e2e/run-linux-e2e.sh tests/linux/test-bootstrap-no-backup.sh tests/linux/test-refresh-unit-contract.sh tests/linux/test-libsecret-client-compile.sh
+          test -x scripts/build-linux.sh
+          test -x scripts/test-linux.sh
+          test -x tests/e2e/run-linux-e2e.sh
+      - name: Test provider and libsecret contract
+        shell: bash
+        env:
+          WINCRED_REQUIRE_DBUS_TESTS: "1"
+        run: scripts/test-linux.sh
+      - name: Assemble musl provider release input
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          scripts/build-linux.sh Release
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-release
+          path: artifacts/Release/linux
+          if-no-files-found: error
+          retention-days: 30
+
+  package:
+    name: Assemble and validate signed-layout MSI
+    needs: [windows, ubuntu]
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-release
+          path: artifacts/Release
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: linux-release
+          path: artifacts/Release/linux
+      - name: Restore pinned WiX v5 tool
+        shell: pwsh
+        run: dotnet tool restore
+      - name: Build MSI, metadata, and checksums
+        shell: pwsh
+        run: .\scripts\package.ps1 -Configuration Release -SkipBuild
+      - name: Validate package and MSI database
+        shell: pwsh
+        run: |
+          .\scripts\Test-Packaging.ps1 `
+            -StageDirectory .\packages\stage\Release `
+            -MsiPath .\packages\Release\wincred-libsecret-wsl-plugin.msi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-layout-unsigned
+          path: |
+            packages/Release
+            packages/stage/Release
+          if-no-files-found: error
+          retention-days: 14
+
+  dependency-security:
+    name: Cargo advisory and license policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+      - name: Install pinned dependency scanners
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install --locked cargo-deny --version 0.20.2
+          cargo install --locked cargo-audit --version 0.22.2
+      - name: Enforce advisory, source, ban, and license policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo deny --config deny.toml check advisories bans licenses sources
+          cargo audit

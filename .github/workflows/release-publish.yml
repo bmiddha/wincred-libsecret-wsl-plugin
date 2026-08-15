@@ -1,0 +1,539 @@
+name: Release publish
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-publish-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  validate-release-pr:
+    name: Validate release change
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'release/v') &&
+      contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+      - name: Install pinned git-cliff
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2
+        with:
+          tool: git-cliff@2.9.1
+      - name: Verify the merged change is release-only
+        id: release-change
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PULL_NUMBER: ${{ github.event.pull_request.number }}
+          RELEASE_BRANCH: ${{ github.event.pull_request.head.ref }}
+          INITIAL_RELEASE: ${{ contains(github.event.pull_request.labels.*.name, 'initial-release') }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          semver = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+          merge_sha = os.environ["MERGE_SHA"]
+
+          def command(*args: str) -> str:
+              return subprocess.check_output(args, text=True).strip()
+
+          def git_file(revision: str, path: str) -> str:
+              return subprocess.check_output(
+                  ("git", "show", f"{revision}:{path}"),
+                  text=True,
+              )
+
+          def workspace_version(content: str) -> str:
+              section = re.search(
+                  r"(?ms)^\[workspace\.package\]\r?\n(?P<body>.*?)(?=^\[|\Z)",
+                  content,
+              )
+              if section is None:
+                  raise SystemExit("Cargo.toml is missing [workspace.package].")
+              version = re.search(
+                  r'(?m)^version\s*=\s*"(?P<version>[^"]+)"\s*$',
+                  section.group("body"),
+              )
+              if version is None or semver.fullmatch(version.group("version")) is None:
+                  raise SystemExit(
+                      "Cargo.toml is missing a numeric three-part [workspace.package] version."
+                  )
+              return version.group("version")
+
+          def normalize_manifest(content: str) -> str:
+              section = re.search(
+                  r"(?ms)^\[workspace\.package\]\r?\n(?P<body>.*?)(?=^\[|\Z)",
+                  content,
+              )
+              if section is None:
+                  raise SystemExit("Cargo.toml is missing [workspace.package].")
+              version = re.search(
+                  r'(?m)^version\s*=\s*"(?P<version>[^"]+)"\s*$',
+                  section.group("body"),
+              )
+              if version is None:
+                  raise SystemExit("Cargo.toml is missing [workspace.package].version.")
+              start = section.start("body") + version.start("version")
+              end = section.start("body") + version.end("version")
+              return content[:start] + "<version>" + content[end:]
+
+          changed_files = command(
+              "gh",
+              "api",
+              f"repos/{os.environ['GITHUB_REPOSITORY']}/pulls/{os.environ['PULL_NUMBER']}/files?per_page=100",
+              "--paginate",
+              "--jq",
+              ".[].filename",
+          ).splitlines()
+          initial_release = os.environ["INITIAL_RELEASE"] == "true"
+          expected_files = ["CHANGELOG.md"] if initial_release else [
+              "CHANGELOG.md",
+              "Cargo.lock",
+              "Cargo.toml",
+          ]
+          if sorted(changed_files) != expected_files:
+              raise SystemExit(
+                  f"Release PR has unexpected changed files: {changed_files!r}."
+              )
+
+          base_sha = command("git", "rev-parse", f"{merge_sha}^")
+          base_manifest = git_file(base_sha, "Cargo.toml")
+          release_manifest = Path("Cargo.toml").read_text(encoding="utf-8")
+          base_version = workspace_version(base_manifest)
+          release_version = workspace_version(release_manifest)
+          if os.environ["RELEASE_BRANCH"] != f"release/v{release_version}":
+              raise SystemExit(
+                  f"Release branch {os.environ['RELEASE_BRANCH']!r} does not match v{release_version}."
+              )
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          if not changelog.startswith("# Changelog\n") or f"## [{release_version}]" not in changelog:
+              raise SystemExit("CHANGELOG.md is not a generated changelog for the release version.")
+
+          if initial_release:
+              if release_version != base_version:
+                  raise SystemExit(
+                      f"Initial release version {release_version} must equal {base_version}."
+                  )
+              release_tags = command(
+                  "git",
+                  "tag",
+                  "--list",
+                  "v[0-9]*.[0-9]*.[0-9]*",
+              ).splitlines()
+              expected_tag = f"v{release_version}"
+              if release_tags:
+                  if release_tags != [expected_tag] or command(
+                      "git",
+                      "rev-list",
+                      "-n",
+                      "1",
+                      expected_tag,
+                  ) != merge_sha:
+                      raise SystemExit(
+                          "Initial release tags must be limited to the current release commit."
+                      )
+          else:
+              if tuple(map(int, release_version.split("."))) <= tuple(map(int, base_version.split("."))):
+                  raise SystemExit(
+                      f"Release version {release_version} is not greater than {base_version}."
+                  )
+              if normalize_manifest(base_manifest) != normalize_manifest(release_manifest):
+                  raise SystemExit(
+                      "Cargo.toml changes outside [workspace.package].version are not allowed."
+                  )
+
+              base_lock = tomllib.loads(git_file(base_sha, "Cargo.lock"))
+              release_lock = tomllib.loads(Path("Cargo.lock").read_text(encoding="utf-8"))
+              base_packages = base_lock["package"]
+              release_packages = release_lock["package"]
+              if len(base_packages) != len(release_packages):
+                  raise SystemExit("Cargo.lock package membership changed in a release-only PR.")
+              workspace_packages = [
+                  package["name"]
+                  for package in base_packages
+                  if package["name"] == "wincred-libsecret"
+                  or package["name"].startswith("wincred-libsecret-")
+              ]
+              if not workspace_packages:
+                  raise SystemExit("Cargo.lock does not contain workspace package entries.")
+              for base_entry, release_entry in zip(base_packages, release_packages):
+                  if base_entry["name"] != release_entry["name"]:
+                      raise SystemExit("Cargo.lock package ordering changed in a release-only PR.")
+                  name = base_entry["name"]
+                  base_package = dict(base_entry)
+                  release_package = dict(release_entry)
+                  if name == "wincred-libsecret" or name.startswith("wincred-libsecret-"):
+                      if base_package.pop("version", None) != base_version:
+                          raise SystemExit(f"Workspace package {name} does not use {base_version} in the base lockfile.")
+                      if release_package.pop("version", None) != release_version:
+                          raise SystemExit(f"Workspace package {name} does not use {release_version} in the release lockfile.")
+                  if base_package != release_package:
+                      raise SystemExit(f"Cargo.lock changed non-version data for package {name}.")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"version={release_version}\n")
+          PY
+          cargo metadata --locked --format-version 1 --no-deps >/dev/null
+      - name: Verify the generated changelog matches the release commit
+        shell: bash
+        env:
+          TAG: v${{ steps.release-change.outputs.version }}
+        run: |
+          set -euo pipefail
+          expected="${RUNNER_TEMP}/expected-changelog.md"
+          git cliff --config .config/cliff.toml --tag "$TAG" -o "$expected"
+          if ! cmp --silent "$expected" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md is stale; refresh the release PR against main and regenerate it."
+            exit 1
+          fi
+
+  wait-ci:
+    name: Wait for merge CI
+    needs: validate-release-pr
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    permissions:
+      actions: read
+    outputs:
+      run_id: ${{ steps.find.outputs.run_id }}
+    steps:
+      - name: Wait for successful CI on the release commit
+        id: find
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 180); do
+            read -r run_id status conclusion < <(
+              gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&per_page=1" \
+                --jq '.workflow_runs[0] // empty | "\(.id) \(.status) \(.conclusion)"'
+            ) || true
+            if [[ -z "${run_id:-}" ]]; then
+              echo "($attempt) waiting for CI to start on $SHA"
+              sleep 20
+              continue
+            fi
+            echo "($attempt) CI run $run_id is $status/$conclusion"
+            if [[ "$status" == "completed" ]]; then
+              if [[ "$conclusion" == "success" ]]; then
+                echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "::error::CI run $run_id concluded '$conclusion'; refusing to publish."
+              exit 1
+            fi
+            sleep 20
+          done
+          echo "::error::Timed out waiting for CI on $SHA."
+          exit 1
+
+  hosted-e2e:
+    name: Run release hosted WSL E2E
+    needs: wait-ci
+    uses: ./.github/workflows/hosted-wsl-e2e.yml
+    with:
+      checkout_ref: ${{ github.event.pull_request.merge_commit_sha }}
+    permissions:
+      contents: read
+
+  sign-package-publish:
+    name: Sign and publish
+    needs: [validate-release-pr, wait-ci, hosted-e2e]
+    runs-on: windows-2022
+    environment: release
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      artifact-metadata: write
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+      - name: Install pinned git-cliff
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2
+        with:
+          tool: git-cliff@2.9.1
+      - name: Validate package version and release tag
+        id: version
+        shell: pwsh
+        env:
+          RELEASE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = Get-Content -LiteralPath Cargo.toml -Raw
+          $workspacePackage = [regex]::Match(
+            $manifest,
+            '(?ms)^\[workspace\.package\]\r?\n(?<body>.*?)(?=^\[|\z)'
+          )
+          $packageVersion = [regex]::Match(
+            $workspacePackage.Groups['body'].Value,
+            '(?m)^version\s*=\s*"(?<version>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))"\s*$'
+          )
+          if (!$workspacePackage.Success -or !$packageVersion.Success) {
+            throw 'Cargo.toml is missing a three-part [workspace.package] version.'
+          }
+          $tag = "v$($packageVersion.Groups['version'].Value)"
+          & git fetch --tags --force
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch release tags.' }
+          $existing = @(& git tag --list $tag)
+          if ($existing -contains $tag) {
+            $tagCommit = (& git rev-list -n 1 $tag).Trim()
+            if ($tagCommit -ne $env:RELEASE_SHA) {
+              throw "Release tag '$tag' already points to '$tagCommit', not the release commit."
+            }
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-release
+          path: artifacts/Release
+          run-id: ${{ needs.wait-ci.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: linux-release
+          path: artifacts/Release/linux
+          run-id: ${{ needs.wait-ci.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Restore pinned WiX v5 tool
+        shell: pwsh
+        run: dotnet tool restore
+      - name: Prepare unsigned package stage
+        shell: pwsh
+        run: .\scripts\package.ps1 -Configuration Release -SkipBuild -PrepareOnly
+      - name: Validate Azure Artifact Signing configuration
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_ARTIFACT_SIGNING_ENDPOINT: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in @(
+            'AZURE_CLIENT_ID',
+            'AZURE_TENANT_ID',
+            'AZURE_SUBSCRIPTION_ID',
+            'AZURE_ARTIFACT_SIGNING_ENDPOINT',
+            'AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME',
+            'AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME'
+          )) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "GitHub release environment variable '$name' must be configured."
+            }
+          }
+      - name: Azure login for Artifact Signing
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign staged Windows payload with Azure Artifact Signing
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files: |
+            ${{ github.workspace }}\packages\stage\Release\windows\wincred-libsecret-wsl-plugin.dll
+            ${{ github.workspace }}\packages\stage\Release\windows\wincred-libsecret.exe
+            ${{ github.workspace }}\packages\stage\Release\windows\wincred-libsecret-broker.exe
+          file-digest: SHA256
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Build MSI from the Azure-signed package stage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\scripts\package.ps1 -Configuration Release -SkipBuild -UsePreparedStage
+      - name: Sign MSI with Azure Artifact Signing
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files: ${{ github.workspace }}\packages\Release\wincred-libsecret-wsl-plugin.msi
+          file-digest: SHA256
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Validate Azure-signed artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\scripts\Test-Packaging.ps1 `
+            -StageDirectory .\packages\stage\Release `
+            -MsiPath .\packages\Release\wincred-libsecret-wsl-plugin.msi `
+            -SigningPath @(
+              '.\packages\stage\Release\windows\wincred-libsecret-wsl-plugin.dll',
+              '.\packages\stage\Release\windows\wincred-libsecret.exe',
+              '.\packages\stage\Release\windows\wincred-libsecret-broker.exe',
+              '.\packages\Release\wincred-libsecret-wsl-plugin.msi'
+            ) `
+            -RequireValidSignatures
+      - name: Write release signing metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = Join-Path $PWD 'packages\Release\wincred-libsecret-wsl-plugin.msi'
+          $signature = Get-AuthenticodeSignature -LiteralPath $msi
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "Azure Artifact Signing did not produce a valid MSI signature: $($signature.Status) ($($signature.StatusMessage))."
+          }
+          $certificate = $signature.SignerCertificate
+          if ($null -eq $certificate -or
+              [string]::IsNullOrWhiteSpace($certificate.Subject) -or
+              [string]::IsNullOrWhiteSpace($certificate.Issuer) -or
+              $certificate.Thumbprint -notmatch '^[A-Fa-f0-9]{40}$') {
+            throw 'Azure Artifact Signing did not expose complete signer metadata.'
+          }
+          @"
+          Subject: $($certificate.Subject)
+          Issuer: $($certificate.Issuer)
+          Thumbprint: $($certificate.Thumbprint)
+          "@.Trim() | Set-Content -LiteralPath (Join-Path $PWD 'packages\Release\wincred-libsecret-release-signing.txt') -Encoding ascii
+      - name: Generate SBOM and release checksums
+        shell: pwsh
+        run: .\scripts\New-ReleaseMetadata.ps1 -OutputDirectory .\packages\Release
+      - name: Attest public release assets
+        if: github.event.repository.visibility == 'public'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: "packages/Release/*"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signed-release-${{ steps.version.outputs.tag }}
+          path: |
+            packages/Release
+            packages/stage/Release
+          if-no-files-found: error
+          retention-days: 30
+      - name: Create annotated release tag
+        shell: pwsh
+        env:
+          RELEASE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $existing = @(& git tag --list $env:TAG)
+          if ($existing -contains $env:TAG) {
+            $tagCommit = (& git rev-list -n 1 $env:TAG).Trim()
+            if ($tagCommit -ne $env:RELEASE_SHA) {
+              throw "Release tag '$env:TAG' already points to '$tagCommit', not the release commit."
+            }
+            Write-Host "Reusing existing release tag '$env:TAG'."
+            exit 0
+          }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          & git tag -a $env:TAG $env:RELEASE_SHA -m "wincred-libsecret-wsl-plugin $env:TAG"
+          if ($LASTEXITCODE -ne 0) { throw "Could not create release tag '$env:TAG'." }
+          & git push origin "refs/tags/$env:TAG"
+          if ($LASTEXITCODE -ne 0) { throw "Could not push release tag '$env:TAG'." }
+      - name: Generate conventional release notes
+        shell: pwsh
+        env:
+          RELEASE_NOTES_PATH: ${{ runner.temp }}\release-notes.md
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & git cliff --config .config/cliff.toml --latest --strip all -o $env:RELEASE_NOTES_PATH
+          if ($LASTEXITCODE -ne 0) { throw 'Could not generate conventional release notes.' }
+          if (!(Test-Path -LiteralPath $env:RELEASE_NOTES_PATH -PathType Leaf)) {
+            throw 'git-cliff did not create release notes.'
+          }
+      - name: Publish release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PRERELEASE: ${{ contains(github.event.pull_request.labels.*.name, 'prerelease') }}
+          RELEASE_NOTES_PATH: ${{ runner.temp }}\release-notes.md
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assets = @(Get-ChildItem -LiteralPath .\packages\Release -File | ForEach-Object FullName)
+          if ($assets.Count -eq 0) { throw 'No release assets were generated.' }
+          $existingRelease = @(
+            & gh release list --limit 1000 --json tagName,isPrerelease --repo $env:GITHUB_REPOSITORY |
+              ConvertFrom-Json |
+              Where-Object { $_.tagName -eq $env:TAG }
+          )
+          if ($existingRelease.Count -gt 0) {
+            $expectedPrerelease = $env:PRERELEASE -eq 'true'
+            if ([bool]$existingRelease[0].isPrerelease -ne $expectedPrerelease) {
+              throw "Existing release '$env:TAG' has an unexpected prerelease state."
+            }
+            & gh release upload $env:TAG @assets --clobber --repo $env:GITHUB_REPOSITORY
+          }
+          else {
+            $arguments = @(
+              'release', 'create', $env:TAG
+            ) + $assets + @(
+              '--verify-tag',
+              '--title', "WinCred Libsecret WSL Plugin $env:TAG",
+              '--notes-file', $env:RELEASE_NOTES_PATH,
+              '--repo', $env:GITHUB_REPOSITORY
+            )
+            if ($env:PRERELEASE -eq 'true') {
+              $arguments += '--prerelease'
+            }
+            & gh @arguments
+          }
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not publish release '$env:TAG'."
+          }
