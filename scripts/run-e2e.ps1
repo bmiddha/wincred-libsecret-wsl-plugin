@@ -182,6 +182,27 @@ try
             Invoke-E2EBash $context $distro 'systemctl start wincred-libsecret-refresh.service; systemctl is-active --quiet wincred-libsecret-refresh.service || test "$(systemctl show -p Result --value wincred-libsecret-refresh.service)" = success' | Out-Null
         } | Out-Null
     }
+    Invoke-E2EAssertion $context "distro.refresh-all-upgrade-lifecycle" {
+        Invoke-E2EProcess $context $cli @(
+            "distro",
+            "refresh",
+            "--all",
+            "--payload-root",
+            $payload,
+            "--broker",
+            $broker
+        ) | Out-Null
+        foreach ($distro in $distros)
+        {
+            $doctor = Invoke-E2EBash $context $distro '/usr/libexec/wincred-libsecret/wincred-libsecret-refresh --doctor'
+            if ($doctor.Output -notmatch 'CHECK payload-hashes ok' -or
+                $doctor.Output -notmatch 'CHECK activation ok' -or
+                $doctor.Output -notmatch 'CHECK modes ok')
+            {
+                throw "Refreshed payload validation failed in '$distro'."
+            }
+        }
+    } | Out-Null
     Invoke-E2EAssertion $context "plugin.lifecycle-refresh-launch" {
         $traceName = "WinCredLibsecretE2E-$($context.RunId)"
         $tracePath = Join-Path $context.ResultRoot "e2e-$($context.RunId).plugin-lifecycle.etl"

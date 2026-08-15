@@ -64,22 +64,28 @@ registration that now belongs to another administrator/product.
 
 ## Complete removal
 
-1. List enabled distributions, then disable every one:
+1. From a non-elevated PowerShell session, use the release CLI to clean every
+   enabled distribution and remove the MSI:
 
    ```powershell
-   & $cli distro list
-   & $cli distro disable <distro-name>
+   & $cli uninstall
    ```
 
    This removes only marker-owned Linux files, restores backed-up Secret
-   Service definitions when safe, and removes the matching HKCU enablement
-   key. It deliberately leaves vault data intact.
+   Service definitions when safe, removes this user's matching HKCU enablement
+   keys (including stale keys for unregistered distros), shuts down WSL, and
+   starts the guarded MSI uninstall after the CLI exits. The helper prompts for
+   elevation and deliberately leaves vault data intact. Use
+   `--keep-distro-provisioning` only for a deliberate manual migration;
+   otherwise it leaves Linux payloads that should be removed before the MSI is
+   gone.
 
-2. Remove the Windows registration and payload:
+2. For a development registration instead of an MSI install:
 
-   - MSI install: use Apps & Features or `msiexec.exe /x <msi>`.
-   - Development registration: run
-     `scripts\Uninstall-DevPlugin.ps1 -RestartWslService`.
+   ```powershell
+   & $cli distro disable <distro-name>
+   scripts\Uninstall-DevPlugin.ps1 -RestartWslService
+   ```
 
    Restart `wslservice`, restart WSL, or reboot. The guarded uninstall
    preserves a value that no longer points to this product DLL.

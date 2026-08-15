@@ -7,21 +7,30 @@ use std::{
     mem::size_of,
     path::{Path, PathBuf},
     process::{Command, Output},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use clap::{Args, Parser, Subcommand};
+use semver::Version;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 use wincred_libsecret::{
-    DISTRIBUTION_ENABLEMENT_VALUE, DoctorFinding, MINIMUM_WSL_VERSION, PLUGIN_REGISTRY_PATH,
-    PLUGIN_VALUE_NAME, WslVersion, compare_versions, distribution_registry_path,
+    AvailableRelease, DISTRIBUTION_ENABLEMENT_PREFIX, DISTRIBUTION_ENABLEMENT_VALUE, DoctorFinding,
+    MINIMUM_WSL_VERSION, PLUGIN_REGISTRY_PATH, PLUGIN_VALUE_NAME, ReleaseCandidate, WslVersion,
+    compare_versions, distribution_registry_path, newest_public_release,
     parse_wsl_distribution_names, parse_wsl_version,
 };
 use wincred_libsecret_protocol::PROTOCOL_VERSION;
 
 #[cfg(windows)]
+use std::collections::HashSet;
+
+#[cfg(windows)]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+#[cfg(windows)]
+use serde::Deserialize;
 
 #[cfg(windows)]
 use windows::{
@@ -46,6 +55,16 @@ const LINUX_PAYLOAD_MANIFEST: &str = "manifest.sha256";
 const LINUX_BOOTSTRAP: &str = "wincred-libsecret-bootstrap.sh";
 const LINUX_STATUS_HELPER: &str = "/usr/libexec/wincred-libsecret/wincred-libsecret-refresh";
 const PLUGIN_DLL_NAME: &str = "wincred-libsecret-wsl-plugin.dll";
+const GITHUB_REPOSITORY: &str = "bmiddha/wincred-libsecret-wsl-plugin";
+const GITHUB_API_BASE: &str = "https://api.github.com";
+const GITHUB_API_VERSION: &str = "2022-11-28";
+const RELEASE_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const RELEASE_INSTALLER_RELATIVE_PATH: &str = r"installer\install.ps1";
+const INSTALL_DIRECTORY_NAME: &str = "WinCredLibsecret";
+const PRODUCT_DISPLAY_NAME: &str = "WinCred Libsecret WSL Plugin";
+const PRODUCT_PUBLISHER: &str = "Bharat Middha";
+const LEGACY_PRODUCT_PUBLISHER: &str = "wincred-libsecret-wsl-plugin contributors";
+const UNINSTALL_REGISTRY_PATH: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -56,6 +75,21 @@ const PLUGIN_DLL_NAME: &str = "wincred-libsecret-wsl-plugin.dll";
 struct Cli {
     #[command(subcommand)]
     command: TopLevelCommand,
+}
+
+#[cfg(windows)]
+#[derive(Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    draft: bool,
+    prerelease: bool,
+}
+
+#[cfg(windows)]
+enum ReleaseUpdate {
+    Current,
+    Available(AvailableRelease),
+    NoSuitableRelease,
 }
 
 #[derive(Debug, Subcommand)]
@@ -70,8 +104,108 @@ enum TopLevelCommand {
         #[command(subcommand)]
         command: DistroCommand,
     },
+    /// Download, verify, install, and validate a newer public release.
+    Upgrade(UpgradeArguments),
+    /// Remove project-owned distro provisioning and then uninstall the MSI.
+    Uninstall(UninstallArguments),
     /// Report non-secret readiness diagnostics.
     Doctor(DoctorArguments),
+}
+
+#[cfg(windows)]
+fn release_update_finding(include_prerelease: bool) -> DoctorFinding {
+    let result = find_release_update(include_prerelease).map_err(|error| error.to_string());
+    release_update_finding_from_result(result, include_prerelease)
+}
+
+#[cfg(windows)]
+fn release_update_finding_from_result(
+    result: std::result::Result<ReleaseUpdate, String>,
+    include_prerelease: bool,
+) -> DoctorFinding {
+    let upgrade_command = if include_prerelease {
+        "`wincred-libsecret upgrade --include-prerelease`"
+    } else {
+        "`wincred-libsecret upgrade`"
+    };
+    match result {
+        Ok(ReleaseUpdate::Current) => DoctorFinding::ok(
+            "release-update",
+            format!("v{} is current", env!("CARGO_PKG_VERSION")),
+        ),
+        Ok(ReleaseUpdate::Available(release)) => DoctorFinding::warning(
+            "release-update",
+            format!(
+                "{} is available (installed: v{})",
+                release.tag_name,
+                env!("CARGO_PKG_VERSION")
+            ),
+            format!("Run {upgrade_command}."),
+        ),
+        Ok(ReleaseUpdate::NoSuitableRelease) => DoctorFinding::warning(
+            "release-update",
+            "no suitable public GitHub Release could be compared",
+            "Retry later or inspect the project Releases page.",
+        ),
+        Err(error) => DoctorFinding::warning(
+            "release-update",
+            format!("could not query GitHub Releases: {error}"),
+            "Retry later; this does not affect local diagnostics.",
+        ),
+    }
+}
+
+#[cfg(windows)]
+fn find_release_update(include_prerelease: bool) -> Result<ReleaseUpdate> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(RELEASE_REQUEST_TIMEOUT)
+        .user_agent(format!("wincred-libsecret/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .context("could not initialize the GitHub Releases client")?;
+    let url = if include_prerelease {
+        format!("{GITHUB_API_BASE}/repos/{GITHUB_REPOSITORY}/releases?per_page=100")
+    } else {
+        format!("{GITHUB_API_BASE}/repos/{GITHUB_REPOSITORY}/releases/latest")
+    };
+    let response = client
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
+        .send()
+        .context("could not contact GitHub")?
+        .error_for_status()
+        .context("GitHub Releases API returned an error")?;
+    let releases = if include_prerelease {
+        response
+            .json::<Vec<GitHubRelease>>()
+            .context("GitHub Releases API returned an invalid response")?
+    } else {
+        vec![
+            response
+                .json::<GitHubRelease>()
+                .context("GitHub Releases API returned an invalid response")?,
+        ]
+    };
+    let latest = newest_public_release(
+        releases.into_iter().map(|release| ReleaseCandidate {
+            tag_name: release.tag_name,
+            draft: release.draft,
+            prerelease: release.prerelease,
+        }),
+        include_prerelease,
+    );
+    Ok(compare_release_update(latest))
+}
+
+#[cfg(windows)]
+fn compare_release_update(latest: Option<AvailableRelease>) -> ReleaseUpdate {
+    let installed = Version::parse(env!("CARGO_PKG_VERSION"))
+        .expect("the Cargo package version must be valid SemVer");
+    match latest {
+        Some(release) if release.version > installed => ReleaseUpdate::Available(release),
+        Some(_) => ReleaseUpdate::Current,
+        None => ReleaseUpdate::NoSuitableRelease,
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -121,6 +255,8 @@ enum DistroCommand {
     Enable(DistroEnableArguments),
     /// Disable the callback and remove only project-owned distribution files.
     Disable(DistroNameArguments),
+    /// Reinstall the current payload in enabled distributions and validate it.
+    Refresh(DistroRefreshArguments),
     /// List registered distributions and their enablement/provisioning state.
     List,
 }
@@ -147,10 +283,43 @@ struct DistroEnableArguments {
 }
 
 #[derive(Debug, Args)]
+struct DistroRefreshArguments {
+    /// Exact enabled WSL distribution name; names containing spaces are supported.
+    #[arg(required_unless_present = "all")]
+    name: Option<String>,
+    /// Refresh every currently enabled distribution.
+    #[arg(long, conflicts_with = "name")]
+    all: bool,
+    /// Directory containing the versioned Linux payload and manifest.
+    #[arg(long)]
+    payload_root: Option<PathBuf>,
+    /// Absolute Windows path to wincred-libsecret-broker.exe.
+    #[arg(long)]
+    broker: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct UpgradeArguments {
+    /// Allow the newest public prerelease to be installed.
+    #[arg(long)]
+    include_prerelease: bool,
+}
+
+#[derive(Debug, Args)]
+struct UninstallArguments {
+    /// Leave enabled distro provisioning in place instead of performing a full cleanup.
+    #[arg(long)]
+    keep_distro_provisioning: bool,
+}
+
+#[derive(Debug, Args)]
 struct DoctorArguments {
     /// Diagnose one distribution; otherwise diagnose all registered distributions.
     #[arg(long)]
     distro: Option<String>,
+    /// Include prereleases when checking for an available GitHub Release.
+    #[arg(long)]
+    include_prerelease: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -249,8 +418,11 @@ fn run(cli: Cli) -> Result<()> {
         TopLevelCommand::Distro { command } => match command {
             DistroCommand::Enable(arguments) => distro_enable(&arguments),
             DistroCommand::Disable(arguments) => distro_disable(&arguments),
+            DistroCommand::Refresh(arguments) => distro_refresh(&arguments),
             DistroCommand::List => distro_list(),
         },
+        TopLevelCommand::Uninstall(arguments) => uninstall(&arguments),
+        TopLevelCommand::Upgrade(arguments) => upgrade(&arguments),
         TopLevelCommand::Doctor(arguments) => doctor(arguments),
     }
 }
@@ -393,8 +565,22 @@ fn print_plugin_status() -> Result<()> {
 
 #[cfg(windows)]
 fn distro_enable(arguments: &DistroEnableArguments) -> Result<()> {
-    check_wsl_version()?;
     let distribution = find_distribution(&arguments.name)?;
+    provision_distribution(&distribution, arguments)?;
+    set_distribution_enabled(distribution.id, true)?;
+    println!(
+        "Enabled WinCred Secret Service for '{}' ({}).",
+        distribution.name, distribution.id
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+fn provision_distribution(
+    distribution: &Distribution,
+    arguments: &DistroEnableArguments,
+) -> Result<()> {
+    check_wsl_version()?;
     ensure!(
         distribution.version == Some(2),
         "'{}' is WSL{}; WinCred requires a WSL 2 distribution",
@@ -443,11 +629,69 @@ fn distro_enable(arguments: &DistroEnableArguments) -> Result<()> {
     let mut install = common_arguments;
     install.push(OsString::from("--install"));
     ensure_wsl_success(&distribution.name, &install, "atomic provider installation")?;
+    Ok(())
+}
 
-    set_distribution_enabled(distribution.id, true)?;
-    println!(
-        "Enabled WinCred Secret Service for '{}' ({}).",
-        distribution.name, distribution.id
+#[cfg(windows)]
+fn distro_refresh(arguments: &DistroRefreshArguments) -> Result<()> {
+    let distributions = if arguments.all {
+        enabled_distributions()?
+    } else {
+        let name = arguments
+            .name
+            .as_deref()
+            .expect("clap requires a distribution name when --all is absent");
+        let distribution = find_distribution(name)?;
+        ensure!(
+            distribution_enabled(distribution.id)?,
+            "'{}' is not enabled; run `wincred-libsecret distro enable {:?}` first",
+            distribution.name,
+            distribution.name
+        );
+        vec![distribution]
+    };
+    if distributions.is_empty() {
+        println!("No enabled WSL distributions need a payload refresh.");
+        return Ok(());
+    }
+
+    for distribution in distributions {
+        let refresh_arguments = DistroEnableArguments {
+            name: distribution.name.clone(),
+            payload_root: arguments.payload_root.clone(),
+            broker: arguments.broker.clone(),
+            replace_conflicts: false,
+        };
+        provision_distribution(&distribution, &refresh_arguments)?;
+        validate_refreshed_distribution(&distribution)?;
+        println!(
+            "Refreshed and validated WinCred Secret Service for '{}' ({}).",
+            distribution.name, distribution.id
+        );
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_refreshed_distribution(distribution: &Distribution) -> Result<()> {
+    let result = remote_doctor(&distribution.name)
+        .with_context(|| format!("could not validate '{}'", distribution.name))?;
+    ensure!(
+        result.success,
+        "post-refresh diagnostics failed for '{}': {}",
+        distribution.name,
+        result.display_error()
+    );
+    let failures = runtime_findings(distribution, Ok(result))
+        .into_iter()
+        .filter(|finding| !finding.ok)
+        .map(|finding| finding.detail)
+        .collect::<Vec<_>>();
+    ensure!(
+        failures.is_empty(),
+        "post-refresh diagnostics failed for '{}': {}",
+        distribution.name,
+        failures.join("; ")
     );
     Ok(())
 }
@@ -455,6 +699,41 @@ fn distro_enable(arguments: &DistroEnableArguments) -> Result<()> {
 #[cfg(windows)]
 fn distro_disable(arguments: &DistroNameArguments) -> Result<()> {
     let distribution = find_distribution(&arguments.name)?;
+    let payload_root = default_payload_root();
+    if payload_root.is_dir() {
+        disable_distro_with_payload(&distribution, &payload_root)?;
+    } else {
+        disable_distro_with_installed_helper(&distribution)?;
+    }
+    set_distribution_enabled(distribution.id, false)?;
+    println!(
+        "Disabled WinCred Secret Service for '{}'; the Windows Credential Manager vault was not modified.",
+        distribution.name
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+fn disable_distro_with_payload(distribution: &Distribution, payload_root: &Path) -> Result<()> {
+    let payload_root = absolute_existing_directory(payload_root, "Linux payload root")?;
+    verify_payload(&payload_root)?;
+    let source = wsl_path(&distribution.name, &payload_root)?;
+    let bootstrap = format!("{source}/{LINUX_BOOTSTRAP}");
+    let result = run_wsl_root(
+        &distribution.name,
+        &[OsString::from(bootstrap), OsString::from("--disable")],
+    )?;
+    ensure!(
+        result.success,
+        "could not remove project-owned files from '{}': {}",
+        distribution.name,
+        result.display_error()
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+fn disable_distro_with_installed_helper(distribution: &Distribution) -> Result<()> {
     let helper_check = run_wsl_root(
         &distribution.name,
         &[
@@ -473,11 +752,6 @@ fn distro_disable(arguments: &DistroNameArguments) -> Result<()> {
         );
     }
     if !helper_check.success {
-        set_distribution_enabled(distribution.id, false)?;
-        println!(
-            "Disabled WinCred Secret Service for '{}'; no project payload was present and the Windows Credential Manager vault was not modified.",
-            distribution.name
-        );
         return Ok(());
     }
     let result = run_wsl_root(
@@ -494,11 +768,6 @@ fn distro_disable(arguments: &DistroNameArguments) -> Result<()> {
             result.display_error()
         );
     }
-    set_distribution_enabled(distribution.id, false)?;
-    println!(
-        "Disabled WinCred Secret Service for '{}'; the Windows Credential Manager vault was not modified.",
-        distribution.name
-    );
     Ok(())
 }
 
@@ -536,6 +805,17 @@ fn distro_list() -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn enabled_distributions() -> Result<Vec<Distribution>> {
+    let mut enabled = Vec::new();
+    for distribution in enumerate_distributions()? {
+        if distribution_enabled(distribution.id)? {
+            enabled.push(distribution);
+        }
+    }
+    Ok(enabled)
 }
 
 #[cfg(windows)]
@@ -595,10 +875,235 @@ fn common_service_conflict(distribution: &str) -> Result<Option<bool>> {
 }
 
 #[cfg(windows)]
+fn upgrade(arguments: &UpgradeArguments) -> Result<()> {
+    let release = match find_release_update(arguments.include_prerelease)? {
+        ReleaseUpdate::Current => {
+            println!(
+                "WinCred Libsecret WSL Plugin v{} is already current.",
+                env!("CARGO_PKG_VERSION")
+            );
+            return Ok(());
+        }
+        ReleaseUpdate::Available(release) => release,
+        ReleaseUpdate::NoSuitableRelease => {
+            bail!("no suitable public GitHub Release is available for upgrade")
+        }
+    };
+    require_non_administrator("upgrade")?;
+    let installer = installed_cli_directory()?.join(RELEASE_INSTALLER_RELATIVE_PATH);
+    let installer = absolute_existing_file(&installer, "release installer")?;
+    let command = vec![
+        OsString::from("-NoLogo"),
+        OsString::from("-NoProfile"),
+        OsString::from("-ExecutionPolicy"),
+        OsString::from("Bypass"),
+        OsString::from("-File"),
+        installer.into_os_string(),
+        OsString::from("-Version"),
+        OsString::from(release.tag_name.as_str()),
+        OsString::from("-WaitForProcessId"),
+        OsString::from(std::process::id().to_string()),
+    ];
+    Command::new("powershell.exe")
+        .args(command)
+        .spawn()
+        .context("could not start the installed release-upgrade script")?;
+    println!(
+        "Started the upgrade to {}; it will continue after this CLI process exits.",
+        release.tag_name
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+fn installed_cli_directory() -> Result<PathBuf> {
+    let executable = std::env::current_exe().context("could not locate the installed CLI")?;
+    let executable = absolute_existing_file(&executable, "installed CLI")?;
+    ensure!(
+        executable
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("wincred-libsecret.exe")),
+        "self-service lifecycle commands must be run from wincred-libsecret.exe"
+    );
+    let directory = executable
+        .parent()
+        .ok_or_else(|| anyhow!("the installed CLI does not have a parent directory"))?;
+    let expected = program_files_directory()?.join(INSTALL_DIRECTORY_NAME);
+    ensure!(
+        windows_paths_equal(directory, &expected),
+        "self-service lifecycle commands must be run from the installed CLI at {}",
+        expected.join("wincred-libsecret.exe").display()
+    );
+    Ok(directory.to_path_buf())
+}
+
+#[cfg(windows)]
+fn program_files_directory() -> Result<PathBuf> {
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let current_version = hklm
+        .open_subkey_with_flags(r"SOFTWARE\Microsoft\Windows\CurrentVersion", KEY_READ)
+        .context("could not inspect the Windows Program Files directory")?;
+    let directory = registry_string(&current_version, "ProgramFilesDir")?
+        .ok_or_else(|| anyhow!("Windows did not provide the Program Files directory"))?;
+    let directory = PathBuf::from(directory);
+    ensure!(
+        directory.is_absolute() && directory.is_dir(),
+        "Windows Program Files directory is not an existing absolute path: {}",
+        directory.display()
+    );
+    Ok(normalize_windows_path(&directory))
+}
+
+#[cfg(windows)]
+fn uninstall(arguments: &UninstallArguments) -> Result<()> {
+    require_non_administrator("uninstall")?;
+    if arguments.keep_distro_provisioning {
+        println!("Preserving enabled distro provisioning at the caller's request.");
+    } else {
+        clean_distro_provisioning()?;
+    }
+
+    let shutdown = run_process("wsl.exe", &["--shutdown".into()])?;
+    if !shutdown.success {
+        eprintln!(
+            "warning: could not shut down WSL before MSI removal: {}",
+            shutdown.display_error()
+        );
+    }
+
+    let Some(product_code) = installed_product_code()? else {
+        println!("The MSI product is already absent.");
+        return Ok(());
+    };
+    let installer = installed_cli_directory()?.join(RELEASE_INSTALLER_RELATIVE_PATH);
+    let installer = absolute_existing_file(&installer, "release installer")?;
+    let command = vec![
+        OsString::from("-NoLogo"),
+        OsString::from("-NoProfile"),
+        OsString::from("-ExecutionPolicy"),
+        OsString::from("Bypass"),
+        OsString::from("-File"),
+        installer.into_os_string(),
+        OsString::from("-UninstallProductCode"),
+        OsString::from(product_code),
+        OsString::from("-WaitForProcessId"),
+        OsString::from(std::process::id().to_string()),
+    ];
+    Command::new("powershell.exe")
+        .args(command)
+        .spawn()
+        .context("could not start the installed uninstaller")?;
+    println!("Started MSI removal; it will continue after this CLI process exits.");
+    Ok(())
+}
+
+#[cfg(windows)]
+fn clean_distro_provisioning() -> Result<()> {
+    let registered = project_distribution_ids()?;
+    if registered.is_empty() {
+        println!("No project distro enablement records need cleanup.");
+        return Ok(());
+    }
+    let distributions = enumerate_distributions()?;
+    let known_ids = distributions
+        .iter()
+        .map(|distribution| distribution.id)
+        .collect::<HashSet<_>>();
+    let tracked_distributions = distributions
+        .into_iter()
+        .filter(|distribution| registered.contains(&distribution.id))
+        .collect::<Vec<_>>();
+    if !tracked_distributions.is_empty() {
+        let payload_root =
+            absolute_existing_directory(&default_payload_root(), "Linux payload root")?;
+        verify_payload(&payload_root)?;
+        for distribution in tracked_distributions {
+            disable_distro_with_payload(&distribution, &payload_root)?;
+            set_distribution_enabled(distribution.id, false)?;
+            println!(
+                "Disabled WinCred Secret Service for '{}'; the Windows Credential Manager vault was not modified.",
+                distribution.name
+            );
+        }
+    }
+    for id in registered {
+        if !known_ids.contains(&id) {
+            println!("Removed stale enablement for unregistered distribution {id}.");
+        }
+        set_distribution_enabled(id, false)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn project_distribution_ids() -> Result<HashSet<Uuid>> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let distributions = match hkcu.open_subkey_with_flags(
+        DISTRIBUTION_ENABLEMENT_PREFIX.trim_end_matches('\\'),
+        KEY_READ,
+    ) {
+        Ok(key) => key,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(error) => return Err(error).context("could not enumerate project distro enablement"),
+    };
+    let mut ids = HashSet::new();
+    for name in distributions.enum_keys() {
+        let name = name.context("could not read a project distro enablement key")?;
+        let id = Uuid::parse_str(name.trim_matches(['{', '}'])).with_context(|| {
+            format!("project distro enablement key has an invalid GUID: {name}")
+        })?;
+        ids.insert(id);
+    }
+    Ok(ids)
+}
+
+#[cfg(windows)]
+fn product_publisher_matches(publisher: Option<&str>) -> bool {
+    publisher.is_some_and(|publisher| {
+        publisher == PRODUCT_PUBLISHER || publisher == LEGACY_PRODUCT_PUBLISHER
+    })
+}
+
+#[cfg(windows)]
+fn installed_product_code() -> Result<Option<String>> {
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let uninstall = match hklm.open_subkey_with_flags(UNINSTALL_REGISTRY_PATH, KEY_READ) {
+        Ok(key) => key,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("could not inspect installed products"),
+    };
+    let mut matches = Vec::new();
+    for name in uninstall.enum_keys() {
+        let name = name.context("could not read an installed-product key")?;
+        let Ok(product_id) = Uuid::parse_str(name.trim_matches(['{', '}'])) else {
+            continue;
+        };
+        let Ok(product) = uninstall.open_subkey_with_flags(&name, KEY_READ) else {
+            continue;
+        };
+        let publisher = registry_string(&product, "Publisher")?;
+        if registry_string(&product, "DisplayName")?.as_deref() != Some(PRODUCT_DISPLAY_NAME)
+            || !product_publisher_matches(publisher.as_deref())
+        {
+            continue;
+        }
+        matches.push(format!("{{{}}}", product_id.hyphenated()));
+    }
+    match matches.as_slice() {
+        [] => Ok(None),
+        [product_code] => Ok(Some(product_code.clone())),
+        _ => bail!(
+            "multiple installed MSI products are named '{PRODUCT_DISPLAY_NAME}'; remove them through Windows Installed Apps"
+        ),
+    }
+}
+
+#[cfg(windows)]
 fn doctor(arguments: DoctorArguments) -> Result<()> {
     let mut findings = Vec::new();
     findings.push(wsl_version_finding());
     findings.extend(plugin_findings()?);
+    findings.push(release_update_finding(arguments.include_prerelease));
     let distributions = if let Some(name) = arguments.distro {
         vec![find_distribution(&name)?]
     } else {
@@ -726,7 +1231,13 @@ fn append_doctor_findings(
     distribution: Option<&str>,
 ) {
     for finding in findings {
-        let status = if finding.ok { "OK" } else { "FAIL" };
+        let status = if finding.warning {
+            "WARN"
+        } else if finding.ok {
+            "OK"
+        } else {
+            "FAIL"
+        };
         let check = distribution.map_or_else(
             || finding.check.to_owned(),
             |name| format!("{} ({name})", finding.check),
@@ -1134,6 +1645,24 @@ fn decode_process_output(bytes: &[u8]) -> String {
 
 #[cfg(windows)]
 fn require_administrator() -> Result<()> {
+    ensure!(
+        is_administrator()?,
+        "administrator privileges are required. Start an elevated terminal and retry."
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+fn require_non_administrator(command: &str) -> Result<()> {
+    ensure!(
+        !is_administrator()?,
+        "run `wincred-libsecret {command}` from a non-elevated terminal; it performs WSL work before requesting elevation when needed"
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+fn is_administrator() -> Result<bool> {
     let script = concat!(
         "$principal = [Security.Principal.WindowsPrincipal] ",
         "[Security.Principal.WindowsIdentity]::GetCurrent(); ",
@@ -1151,10 +1680,10 @@ fn require_administrator() -> Result<()> {
     )
     .context("could not determine whether the process is elevated")?;
     ensure!(
-        result.success && result.stdout.trim().eq_ignore_ascii_case("true"),
-        "administrator privileges are required. Start an elevated terminal and retry."
+        result.success,
+        "could not determine whether the process is elevated"
     );
-    Ok(())
+    Ok(result.stdout.trim().eq_ignore_ascii_case("true"))
 }
 
 #[cfg(windows)]
@@ -1371,11 +1900,13 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        Distribution, ProcessResult, SignatureStatus, decode_process_output,
-        distribution_diagnostics, format_doctor_report, normalize_windows_path,
-        should_check_runtime, signature_status, signature_status_from_winverifytrust,
-        windows_paths_equal,
+        Distribution, ProcessResult, ReleaseUpdate, SignatureStatus, compare_release_update,
+        decode_process_output, distribution_diagnostics, format_doctor_report,
+        normalize_windows_path, product_publisher_matches, program_files_directory,
+        release_update_finding_from_result, should_check_runtime, signature_status,
+        signature_status_from_winverifytrust, windows_paths_equal,
     };
+    use wincred_libsecret::AvailableRelease;
 
     #[test]
     fn decodes_utf8_process_output() {
@@ -1488,5 +2019,66 @@ mod tests {
                 .contains("Run `wincred-libsecret distro enable \"Ubuntu 24.04\"` after resolving")
         );
         assert!(!report.contains("<name>"));
+    }
+
+    #[test]
+    fn doctor_reports_an_available_release_without_failing_local_diagnostics() {
+        let finding = release_update_finding_from_result(
+            Ok(ReleaseUpdate::Available(AvailableRelease {
+                tag_name: "v0.2.0-rc.1".to_owned(),
+                version: semver::Version::parse("0.2.0-rc.1").unwrap(),
+            })),
+            true,
+        );
+
+        assert!(finding.ok);
+        assert!(finding.warning);
+        assert!(finding.detail.contains("v0.2.0-rc.1"));
+        assert_eq!(
+            finding.remedy.as_deref(),
+            Some("Run `wincred-libsecret upgrade --include-prerelease`.")
+        );
+    }
+
+    #[test]
+    fn doctor_treats_release_check_transport_failures_as_warnings() {
+        let finding =
+            release_update_finding_from_result(Err("request timed out".to_owned()), false);
+
+        assert!(finding.ok);
+        assert!(finding.warning);
+        assert!(finding.detail.contains("request timed out"));
+        assert!(
+            finding
+                .remedy
+                .as_deref()
+                .is_some_and(|remedy| remedy.contains("does not affect local diagnostics"))
+        );
+    }
+
+    #[test]
+    fn release_comparison_ignores_the_installed_or_older_version() {
+        let current = compare_release_update(Some(AvailableRelease {
+            tag_name: "v0.1.0".to_owned(),
+            version: semver::Version::parse("0.1.0").unwrap(),
+        }));
+        assert!(matches!(current, ReleaseUpdate::Current));
+    }
+
+    #[test]
+    fn uninstaller_recognizes_current_and_legacy_product_publishers() {
+        assert!(product_publisher_matches(Some("Bharat Middha")));
+        assert!(product_publisher_matches(Some(
+            "wincred-libsecret-wsl-plugin contributors"
+        )));
+        assert!(!product_publisher_matches(Some("unrelated publisher")));
+        assert!(!product_publisher_matches(None));
+    }
+
+    #[test]
+    fn uses_the_machine_program_files_directory_for_installed_lifecycle_files() {
+        let directory = program_files_directory().unwrap();
+        assert!(directory.is_absolute());
+        assert!(directory.is_dir());
     }
 }

@@ -96,6 +96,7 @@ foreach ($componentGuid in @(
     "D0F7BA9B-8BF5-4163-B70B-58E0460B5AA2",
     "F462CF31-39FD-483A-820C-2A8B1264B905",
     "BF4D4A6A-66CA-4789-BFE0-E1B36AF2541F",
+    "4396E42B-A0F7-408E-8B1D-837FB381CCFB",
     "F5A5C3D2-9ACD-45E4-98A6-CFF878FC9199"
 ))
 {
@@ -221,6 +222,9 @@ Assert-True (!(Test-Path -LiteralPath (Join-Path $repoRoot "packaging\signing\pu
 $releaseInstaller = Get-Content -LiteralPath (Join-Path $repoRoot "install.ps1") -Raw
 Assert-True ($releaseInstaller.Contains("releases/latest")) "Release installer does not select the latest release by default."
 Assert-True ($releaseInstaller.Contains("releases/tags/")) "Release installer cannot select a specific release tag."
+Assert-True ($releaseInstaller.Contains('[switch]$IncludePrerelease')) "Release installer cannot select prereleases."
+Assert-True ($releaseInstaller.Contains("Select-NewestPublicRelease")) "Release installer does not select prereleases by semantic version."
+Assert-True ($releaseInstaller.Contains("Compare-SemanticVersion")) "Release installer cannot compare prerelease versions."
 Assert-True ($releaseInstaller.Contains("checksums.sha256")) "Release installer does not verify release checksums."
 Assert-True ($releaseInstaller.Contains("wincred-libsecret-release-signing.txt")) "Release installer does not retrieve signer metadata."
 Assert-True ($releaseInstaller.Contains("Get-ReleaseSigningMetadata")) "Release installer does not validate signer metadata."
@@ -228,6 +232,18 @@ Assert-True (!$releaseInstaller.Contains("wincred-libsecret-release.cer")) "Rele
 Assert-True (!$releaseInstaller.Contains("Import-Certificate")) "Release installer must not modify certificate trust stores."
 Assert-True ($releaseInstaller.Contains("Get-AuthenticodeSignature")) "Release installer does not validate the MSI signature."
 Assert-True ($releaseInstaller.Contains("msiexec.exe")) "Release installer does not install the MSI."
+Assert-True ($releaseInstaller.Contains("distro refresh --all")) "Release installer does not refresh enabled WSL distributions after an upgrade."
+Assert-True ($releaseInstaller.Contains("Wait-InitiatingProcess")) "Release installer does not wait for a self-updating CLI to exit."
+Assert-True ($releaseInstaller.Contains('[int]$WaitForProcessId')) "Release installer cannot receive a self-update process ID."
+Assert-True ($releaseInstaller.Contains("Invoke-ElevatedUninstaller")) "Release installer cannot defer MSI removal until the CLI exits."
+Assert-True ($releaseInstaller.Contains("UninstallProductCode")) "Release installer does not validate the MSI product selected for removal."
+Assert-True ($releaseInstaller.Contains("WinCredLibsecret\installer-cache")) "Release installer does not stage MSI assets below Program Files."
+Assert-True ($releaseInstaller.Contains('Remove-Item -LiteralPath $installerCache -Force')) "Release installer leaves its protected staging directory behind."
+Assert-True ($releaseInstaller.Contains("RegistryView]::Registry64")) "Release installer does not resolve 64-bit Program Files from trusted machine state."
+Assert-True (!$releaseInstaller.Contains('$env:ProgramFiles')) "Release installer trusts a caller-controlled Program Files environment variable."
+$packageAssembler = Get-Content -LiteralPath (Join-Path $PSScriptRoot "Assemble-Package.ps1") -Raw
+Assert-True ($packageAssembler.Contains('@{ Source = "..\install.ps1"; Destination = "installer\install.ps1" }')) "Package staging omits the release-upgrade script."
+Assert-True ($wix.Contains('File Id="ReleaseInstallerScript" Source="$(var.SourceDir)\installer\install.ps1"')) "WiX does not install the release-upgrade script."
 $releasePublishWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github\workflows\release-publish.yml") -Raw
 $releaseChangeValidator = Get-Content -LiteralPath (Join-Path $PSScriptRoot "release\test-release-change.py") -Raw
 $releaseSigningMetadataScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot "release\Write-ReleaseSigningMetadata.ps1") -Raw
@@ -338,7 +354,8 @@ if (![string]::IsNullOrEmpty($MsiPath))
             "wincred-libsecret.exe",
             "wincred-libsecret-broker.exe",
             "wincred-libsecret-provider",
-            "wincred-libsecret-interop.service"
+            "wincred-libsecret-interop.service",
+            "install.ps1"
         ))
         {
             Assert-True ($fileNames -contains $expected) "MSI is missing expected payload '$expected'."

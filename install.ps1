@@ -1,6 +1,10 @@
 [CmdletBinding()]
 param(
-    [string]$Version = "latest"
+    [string]$Version = "latest",
+    [switch]$IncludePrerelease,
+    [switch]$ElevatedInstall,
+    [int]$WaitForProcessId = 0,
+    [string]$UninstallProductCode
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,13 +22,133 @@ $script:RequiredAssets = @(
     "wincred-libsecret-release-signing.txt"
 )
 
-function Assert-Administrator
+function Test-Administrator
 {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
-    if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
+    $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Get-ProgramFilesDirectory
+{
+    $baseKey = $null
+    $currentVersion = $null
+    try
     {
-        throw "Run this installer from an elevated PowerShell session."
+        $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::LocalMachine,
+            [Microsoft.Win32.RegistryView]::Registry64
+        )
+        $currentVersion = $baseKey.OpenSubKey("SOFTWARE\Microsoft\Windows\CurrentVersion", $false)
+        if ($null -eq $currentVersion)
+        {
+            throw "Windows did not provide the Program Files registry key."
+        }
+        $directory = $currentVersion.GetValue(
+            "ProgramFilesDir",
+            $null,
+            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+        )
+        if ($directory -isnot [string] -or
+            [string]::IsNullOrWhiteSpace($directory) -or
+            ![IO.Path]::IsPathRooted($directory) -or
+            $directory.Contains("%"))
+        {
+            throw "Windows did not provide an absolute Program Files directory."
+        }
+        $directory
+    }
+    finally
+    {
+        if ($null -ne $currentVersion) { $currentVersion.Dispose() }
+        if ($null -ne $baseKey) { $baseKey.Dispose() }
+    }
+}
+
+$script:ProgramFilesDirectory = Get-ProgramFilesDirectory
+
+function Invoke-ElevatedInstaller
+{
+    param([Parameter(Mandatory)][string]$RequestedVersion, [switch]$IncludePrerelease)
+
+    $arguments = @(
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "`"$PSCommandPath`"",
+        "-Version",
+        $RequestedVersion,
+        "-ElevatedInstall"
+    )
+    if ($IncludePrerelease)
+    {
+        $arguments += "-IncludePrerelease"
+    }
+    $process = Start-Process `
+        -FilePath (Join-Path $PSHOME "powershell.exe") `
+        -Verb RunAs `
+        -ArgumentList $arguments `
+        -Wait `
+        -PassThru
+    if ($process.ExitCode -notin 0, 3010)
+    {
+        throw "Elevated MSI installation failed with exit code $($process.ExitCode)."
+    }
+    $process.ExitCode
+}
+
+function Wait-InitiatingProcess
+{
+    param([int]$ProcessId)
+
+    if ($ProcessId -lt 0)
+    {
+        throw "WaitForProcessId must be a non-negative process ID."
+    }
+    if ($ProcessId -gt 0)
+    {
+        $initiatingProcess = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+        if ($null -ne $initiatingProcess)
+        {
+            Wait-Process -InputObject $initiatingProcess
+        }
+    }
+}
+
+function Invoke-ElevatedUninstaller
+{
+    param([Parameter(Mandatory)][string]$ProductCode)
+
+    $msiExec = Join-Path ([Environment]::SystemDirectory) "msiexec.exe"
+    $process = Start-Process `
+        -FilePath $msiExec `
+        -Verb RunAs `
+        -ArgumentList @("/x", $ProductCode, "/qn", "/norestart") `
+        -Wait `
+        -PassThru
+    if ($process.ExitCode -notin 0, 1605, 3010)
+    {
+        throw "MSI uninstall failed with exit code $($process.ExitCode)."
+    }
+    if ($process.ExitCode -eq 3010)
+    {
+        Write-Warning "Windows requested a restart to complete uninstallation."
+    }
+}
+
+function Invoke-DistroRefresh
+{
+    $installedCli = Join-Path $script:ProgramFilesDirectory "WinCredLibsecret\wincred-libsecret.exe"
+    if (!(Test-Path -LiteralPath $installedCli -PathType Leaf))
+    {
+        throw "MSI installation completed but the installed CLI is missing: '$installedCli'."
+    }
+    & $installedCli distro refresh --all
+    if ($LASTEXITCODE -ne 0)
+    {
+        throw "MSI installation completed, but enabled WSL distributions could not be refreshed and validated."
     }
 }
 
@@ -205,16 +329,202 @@ function Assert-MsiSignature
     }
 }
 
-Assert-Administrator
+function ConvertTo-SemanticVersion
+{
+    param([Parameter(Mandatory)][string]$Tag)
+
+    $match = [regex]::Match(
+        $Tag,
+        '^[vV]?(?<major>0|[1-9]\d*)\.(?<minor>0|[1-9]\d*)\.(?<patch>0|[1-9]\d*)(?:-(?<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
+    )
+    if (!$match.Success)
+    {
+        return $null
+    }
+    [UInt64]$major = 0
+    [UInt64]$minor = 0
+    [UInt64]$patch = 0
+    if (![UInt64]::TryParse($match.Groups["major"].Value, [ref]$major) -or
+        ![UInt64]::TryParse($match.Groups["minor"].Value, [ref]$minor) -or
+        ![UInt64]::TryParse($match.Groups["patch"].Value, [ref]$patch))
+    {
+        return $null
+    }
+    $prerelease = if ($match.Groups["prerelease"].Success)
+    {
+        $match.Groups["prerelease"].Value
+    }
+    else
+    {
+        $null
+    }
+    if ($null -ne $prerelease)
+    {
+        foreach ($identifier in $prerelease.Split("."))
+        {
+            if ($identifier -match '^\d+$' -and $identifier.Length -gt 1 -and $identifier.StartsWith("0"))
+            {
+                return $null
+            }
+        }
+    }
+    [PSCustomObject]@{
+        Major = $major
+        Minor = $minor
+        Patch = $patch
+        Prerelease = $prerelease
+    }
+}
+
+function Compare-SemanticVersion
+{
+    param(
+        [Parameter(Mandatory)]$Left,
+        [Parameter(Mandatory)]$Right
+    )
+
+    foreach ($component in @("Major", "Minor", "Patch"))
+    {
+        $comparison = $Left.$component.CompareTo($Right.$component)
+        if ($comparison -ne 0)
+        {
+            return $comparison
+        }
+    }
+    if ($null -eq $Left.Prerelease)
+    {
+        if ($null -eq $Right.Prerelease) { return 0 }
+        return 1
+    }
+    if ($null -eq $Right.Prerelease)
+    {
+        return -1
+    }
+
+    $leftIdentifiers = $Left.Prerelease.Split(".")
+    $rightIdentifiers = $Right.Prerelease.Split(".")
+    $count = [Math]::Min($leftIdentifiers.Count, $rightIdentifiers.Count)
+    for ($index = 0; $index -lt $count; $index++)
+    {
+        $leftIdentifier = $leftIdentifiers[$index]
+        $rightIdentifier = $rightIdentifiers[$index]
+        $leftNumeric = $leftIdentifier -match '^\d+$'
+        $rightNumeric = $rightIdentifier -match '^\d+$'
+        if ($leftNumeric -and $rightNumeric)
+        {
+            $comparison = $leftIdentifier.Length.CompareTo($rightIdentifier.Length)
+            if ($comparison -eq 0)
+            {
+                $comparison = [string]::CompareOrdinal($leftIdentifier, $rightIdentifier)
+            }
+        }
+        elseif ($leftNumeric)
+        {
+            $comparison = -1
+        }
+        elseif ($rightNumeric)
+        {
+            $comparison = 1
+        }
+        else
+        {
+            $comparison = [string]::CompareOrdinal($leftIdentifier, $rightIdentifier)
+        }
+        if ($comparison -ne 0)
+        {
+            return $comparison
+        }
+    }
+    $leftIdentifiers.Count.CompareTo($rightIdentifiers.Count)
+}
+
+function Select-NewestPublicRelease
+{
+    param([Parameter(Mandatory)][object[]]$Releases)
+
+    $selected = $null
+    $selectedVersion = $null
+    foreach ($release in $Releases)
+    {
+        if ([bool]$release.draft)
+        {
+            continue
+        }
+        $version = ConvertTo-SemanticVersion -Tag ([string]$release.tag_name)
+        if ($null -eq $version)
+        {
+            continue
+        }
+        if ($null -eq $selectedVersion -or (Compare-SemanticVersion -Left $version -Right $selectedVersion) -gt 0)
+        {
+            $selected = $release
+            $selectedVersion = $version
+        }
+    }
+    if ($null -eq $selected)
+    {
+        throw "GitHub did not return a public stable or prerelease semantic-version release."
+    }
+    $selected
+}
+
+if (![string]::IsNullOrWhiteSpace($UninstallProductCode))
+{
+    if ($UninstallProductCode -notmatch '^\{[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}\}$')
+    {
+        throw "UninstallProductCode must be a Windows Installer product GUID."
+    }
+    if (Test-Administrator)
+    {
+        throw "Run the uninstall command from a non-elevated PowerShell session. It requests elevation only for MSI removal after WSL cleanup."
+    }
+    Wait-InitiatingProcess -ProcessId $WaitForProcessId
+    Invoke-ElevatedUninstaller -ProductCode $UninstallProductCode
+    Write-Host "Uninstalled WinCred Libsecret WSL Plugin. The Windows Credential Manager vault was preserved."
+    return
+}
 
 if ([string]::IsNullOrWhiteSpace($Version))
 {
     throw "Version must be 'latest' or a release version such as 'v0.1.0'."
 }
 $requestedVersion = $Version.Trim()
-$releaseUri = if ($requestedVersion.Equals("latest", [StringComparison]::OrdinalIgnoreCase))
+if ($requestedVersion -notmatch '^(?i:latest)$|^[vV]?\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$')
 {
-    "https://api.github.com/repos/$script:Repository/releases/latest"
+    throw "Version must be 'latest' or a semantic release version such as 'v0.1.0', 'v0.2.0-rc.1', or 'v0.2.0+build.1'."
+}
+if (!(Test-Administrator))
+{
+    Wait-InitiatingProcess -ProcessId $WaitForProcessId
+    $installerExitCode = Invoke-ElevatedInstaller `
+        -RequestedVersion $requestedVersion `
+        -IncludePrerelease:$IncludePrerelease
+    Invoke-DistroRefresh
+    Write-Host "Installed WinCred Libsecret WSL Plugin $requestedVersion and refreshed enabled WSL distributions."
+    if ($installerExitCode -eq 3010)
+    {
+        Write-Warning "Windows requested a restart to complete installation."
+    }
+    Write-Host "Enable a distribution with:"
+    Write-Host "  & `"$script:ProgramFilesDirectory\WinCredLibsecret\wincred-libsecret.exe`" distro enable <distro-name>"
+    return
+}
+if (!$ElevatedInstall)
+{
+    throw "Run the installer from a non-elevated PowerShell session. It requests elevation only for MSI installation, then safely refreshes WSL distributions without elevation."
+}
+
+$release = if ($requestedVersion.Equals("latest", [StringComparison]::OrdinalIgnoreCase))
+{
+    if ($IncludePrerelease)
+    {
+        $releases = @(Invoke-GitHubRequest -Uri "https://api.github.com/repos/$script:Repository/releases?per_page=100")
+        Select-NewestPublicRelease -Releases $releases
+    }
+    else
+    {
+        Invoke-GitHubRequest -Uri "https://api.github.com/repos/$script:Repository/releases/latest"
+    }
 }
 else
 {
@@ -226,10 +536,8 @@ else
     {
         "v$requestedVersion"
     }
-    "https://api.github.com/repos/$script:Repository/releases/tags/$([Uri]::EscapeDataString($tag))"
+    Invoke-GitHubRequest -Uri "https://api.github.com/repos/$script:Repository/releases/tags/$([Uri]::EscapeDataString($tag))"
 }
-
-$release = Invoke-GitHubRequest -Uri $releaseUri
 if ([bool]$release.draft)
 {
     throw "Refusing to install a draft release."
@@ -246,11 +554,18 @@ foreach ($name in $script:RequiredAssets)
     $selectedAssets[$name] = Get-ReleaseAsset -Assets $assets -Name $name
 }
 
-$downloadDirectory = Join-Path ([IO.Path]::GetTempPath()) (
+$installerCache = Join-Path $script:ProgramFilesDirectory "WinCredLibsecret\installer-cache"
+New-Item -ItemType Directory -Path $installerCache -Force | Out-Null
+if ((Get-Item -LiteralPath $installerCache -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)
+{
+    throw "Refusing reparse-point installer cache '$installerCache'."
+}
+$downloadDirectory = Join-Path $installerCache (
     "WinCredLibsecret-$($release.tag_name)-$([Guid]::NewGuid().ToString('N'))"
 )
 New-Item -ItemType Directory -Path $downloadDirectory | Out-Null
 
+$installerExitCode = $null
 try
 {
     $downloaded = @{}
@@ -274,7 +589,7 @@ try
     Assert-MsiSignature -Path $downloaded["wincred-libsecret-wsl-plugin.msi"] -ExpectedSigner $metadata
 
     $installer = Start-Process `
-        -FilePath "msiexec.exe" `
+        -FilePath (Join-Path ([Environment]::SystemDirectory) "msiexec.exe") `
         -ArgumentList @("/i", "`"$($downloaded["wincred-libsecret-wsl-plugin.msi"])`"", "/qn", "/norestart") `
         -Wait `
         -PassThru
@@ -282,14 +597,8 @@ try
     {
         throw "MSI installation failed with exit code $($installer.ExitCode)."
     }
+    $installerExitCode = $installer.ExitCode
 
-    Write-Host "Installed WinCred Libsecret WSL Plugin $($release.tag_name)."
-    if ($installer.ExitCode -eq 3010)
-    {
-        Write-Warning "Windows requested a restart to complete installation."
-    }
-    Write-Host "Enable a distribution with:"
-    Write-Host "  & `"$env:ProgramFiles\WinCredLibsecret\wincred-libsecret.exe`" distro enable <distro-name>"
 }
 finally
 {
@@ -297,4 +606,12 @@ finally
     {
         Remove-Item -LiteralPath $downloadDirectory -Recurse -Force
     }
+    if ((Test-Path -LiteralPath $installerCache -PathType Container) -and
+        @(
+            Get-ChildItem -LiteralPath $installerCache -Force
+        ).Count -eq 0)
+    {
+        Remove-Item -LiteralPath $installerCache -Force
+    }
 }
+exit $installerExitCode
