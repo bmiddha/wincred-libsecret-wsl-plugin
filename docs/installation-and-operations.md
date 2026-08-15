@@ -88,6 +88,8 @@ msiexec.exe /i .\wincred-libsecret-wsl-plugin.msi
 
 The per-machine MSI installs its payload below the Program Files product
 directory and invokes the CLI as deferred non-impersonating custom actions.
+It appends that product directory to the machine `PATH`, preserving existing
+entries, so a new terminal can invoke `wincred-libsecret.exe` directly.
 The install/repair path registers only this value:
 
 ```text
@@ -110,6 +112,7 @@ WSL before starting a new distribution. Use `plugin status` and `doctor` to
 confirm status.
 
 MSI removal unregisters only the matching DLL and removes its installed files.
+It also removes only the MSI's product-directory `PATH` entry.
 It does not remove per-distro provisioning or WinCred data. Disable each
 distro first as described below.
 

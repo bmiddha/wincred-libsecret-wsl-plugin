@@ -25,6 +25,14 @@
         <Component Id="CommandBinariesComponent" Guid="{6D0134A8-7BF4-4287-A147-DB907A6DB083}" Bitness="always64">
           <File Id="WincredCli" Source="$(var.SourceDir)\windows\wincred-libsecret.exe" KeyPath="yes" />
           <File Id="BrokerExe" Source="$(var.SourceDir)\windows\wincred-libsecret-broker.exe" />
+          <Environment
+              Id="MachinePathEntry"
+              Name="PATH"
+              Value="[INSTALLFOLDER]"
+              Action="set"
+              Part="last"
+              Permanent="no"
+              System="yes" />
         </Component>
         <Directory Id="LINUXPAYLOADDIR" Name="linux">
           <Component Id="LinuxProviderComponent" Guid="{4843FB32-C6CE-46B4-BE31-AF1A5D4E2F8A}" Bitness="always64">
