@@ -176,8 +176,8 @@ impl DistributionDiagnostics {
         match self.enabled {
             Some(true) if self.wsl2 && self.runtime_ok => "enabled, working",
             Some(true) => "enabled, degraded",
-            Some(false) => "disabled, degraded",
-            None => "enablement unknown, degraded",
+            Some(false) => "disabled",
+            None => "enablement unknown",
         }
     }
 }
@@ -740,18 +740,25 @@ fn append_doctor_findings(
 
 #[cfg(windows)]
 fn distribution_findings(distribution: &Distribution) -> DistributionDiagnostics {
-    distribution_diagnostics(
-        distribution,
-        distribution_enabled(distribution.id).map_err(|error| error.to_string()),
-        remote_doctor(&distribution.name).map_err(|error| error.to_string()),
-    )
+    let enablement = distribution_enabled(distribution.id).map_err(|error| error.to_string());
+    let remote = if should_check_runtime(&enablement) {
+        Some(remote_doctor(&distribution.name).map_err(|error| error.to_string()))
+    } else {
+        None
+    };
+    distribution_diagnostics(distribution, enablement, remote)
+}
+
+#[cfg(windows)]
+fn should_check_runtime(enablement: &Result<bool, String>) -> bool {
+    enablement.as_ref().is_ok_and(|enabled| *enabled)
 }
 
 #[cfg(windows)]
 fn distribution_diagnostics(
     distribution: &Distribution,
     enablement: Result<bool, String>,
-    remote: Result<ProcessResult, String>,
+    remote: Option<Result<ProcessResult, String>>,
 ) -> DistributionDiagnostics {
     let mut findings = Vec::new();
     findings.push(if distribution.version == Some(2) {
@@ -796,11 +803,12 @@ fn distribution_diagnostics(
             None
         }
     };
-    findings.extend(runtime_findings(distribution, remote));
-    let runtime_ok = findings
-        .iter()
-        .filter(|finding| finding.check == "distro-runtime")
-        .all(|finding| finding.ok);
+    let runtime_ok = remote.is_some_and(|remote| {
+        let runtime_findings = runtime_findings(distribution, remote);
+        let runtime_ok = runtime_findings.iter().all(|finding| finding.ok);
+        findings.extend(runtime_findings);
+        runtime_ok
+    });
     DistributionDiagnostics {
         name: distribution.name.clone(),
         enabled,
@@ -1364,8 +1372,9 @@ mod tests {
 
     use super::{
         Distribution, ProcessResult, SignatureStatus, decode_process_output,
-        distribution_diagnostics, format_doctor_report, normalize_windows_path, signature_status,
-        signature_status_from_winverifytrust, windows_paths_equal,
+        distribution_diagnostics, format_doctor_report, normalize_windows_path,
+        should_check_runtime, signature_status, signature_status_from_winverifytrust,
+        windows_paths_equal,
     };
 
     #[test]
@@ -1436,42 +1445,44 @@ mod tests {
             name: "Fedora".to_owned(),
             version: Some(2),
         };
-        let docker_desktop = distribution_diagnostics(
-            &docker_desktop,
-            Ok(false),
-            Ok(ProcessResult {
-                success: false,
-                stdout: String::new(),
-                stderr: "refresh helper is absent".to_owned(),
-            }),
-        );
+        let docker_desktop = distribution_diagnostics(&docker_desktop, Ok(false), None);
         let ubuntu = distribution_diagnostics(
             &ubuntu,
             Ok(true),
-            Ok(ProcessResult {
+            Some(Ok(ProcessResult {
                 success: true,
                 stdout: "CHECK payload failed manifest mismatch\n".to_owned(),
                 stderr: String::new(),
-            }),
+            })),
         );
         let fedora = distribution_diagnostics(
             &fedora,
             Ok(true),
-            Ok(ProcessResult {
+            Some(Ok(ProcessResult {
                 success: true,
                 stdout: "CHECK payload ok manifest verified\n".to_owned(),
                 stderr: String::new(),
-            }),
+            })),
         );
 
         let report = format_doctor_report(&[], &[docker_desktop, ubuntu, fedora]);
 
-        assert!(report.contains("[DISTRO] docker-desktop: disabled, degraded"));
+        assert!(!should_check_runtime(&Ok(false)));
+        assert!(should_check_runtime(&Ok(true)));
+        assert!(report.contains("[DISTRO] docker-desktop: disabled"));
+        assert!(!report.contains("[DISTRO] docker-desktop: disabled,"));
         assert!(report.contains("[DISTRO] Ubuntu 24.04: enabled, degraded"));
         assert!(report.contains("[DISTRO] Fedora: enabled, working"));
         assert!(report.contains("[FAIL] distro-enablement (docker-desktop): disabled:"));
+        assert!(!report.contains("distro-runtime (docker-desktop)"));
+        assert!(!report.contains("refresh helper is absent"));
         assert!(report.contains("[FAIL] distro-runtime (Ubuntu 24.04): payload: failed"));
-        assert!(report.contains("Run `wincred-libsecret distro enable \"docker-desktop\"`."));
+        assert_eq!(
+            report
+                .matches("wincred-libsecret distro enable \"docker-desktop\"")
+                .count(),
+            1
+        );
         assert!(
             report
                 .contains("Run `wincred-libsecret distro enable \"Ubuntu 24.04\"` after resolving")
