@@ -81,4 +81,17 @@ foreach ($workflowName in @("ci.yml", "codeql.yml"))
         "$workflowName does not limit cancellation to pull request updates."
 }
 
+$releasePublisher = Get-Content `
+    -LiteralPath (Join-Path $repositoryRoot ".github\workflows\release-publish.yml") `
+    -Raw
+Assert-True `
+    ($releasePublisher.Contains("id: app-token")) `
+    "Release publishing does not mint the GitHub App token required to create protected tags."
+Assert-True `
+    ($releasePublisher.Contains("actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1")) `
+    "Release publishing does not use the pinned GitHub App token action."
+Assert-True `
+    ($releasePublisher.Contains("token: `${{ steps.app-token.outputs.token }}")) `
+    "Release publishing does not authenticate checkout with the GitHub App token."
+
 Write-Host "CI change-scope validation passed."
