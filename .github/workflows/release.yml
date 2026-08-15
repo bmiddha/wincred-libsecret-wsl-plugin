@@ -51,14 +51,6 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: release-preparation-cargo-1.97.1-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: release-preparation-cargo-1.97.1-
       - name: Install pinned Rust toolchain
         shell: bash
         run: |
@@ -66,6 +58,12 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal
           rustup default 1.97.1
           rustc --version | grep -F '1.97.1'
+      - name: Restore Cargo dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-preparation-ubuntu-24.04-rust-1.97.1
+          cache-bin: "false"
+          cache-targets: "false"
       - name: Install pinned git-cliff
         uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2
         with:

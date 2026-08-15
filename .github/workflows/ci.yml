@@ -46,22 +46,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~\.cargo\registry
-            ~\.cargo\git
-            target
-          key: windows-cargo-1.97.1-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: windows-cargo-1.97.1-
       - name: Install pinned Rust toolchain
         shell: pwsh
         run: |
           rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
           rustup default 1.97.1
           if ((rustc --version) -notmatch '1\.97\.1') { throw 'Rust 1.97.1 was not selected.' }
+      - name: Restore Rust compilation and Cargo cache
+        env:
+          CARGO_TARGET_DIR: target-ci
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: windows-2022-rust-1.97.1-x86_64-pc-windows-msvc-ci-target
+          # Preserve the clean release build while caching validation dependencies.
+          workspaces: |
+            . -> target-ci
       - name: Validate Rust, CMake, CTest, and live WinCred
         shell: pwsh
+        env:
+          CARGO_TARGET_DIR: target-ci
         run: .\test.ps1 -Configuration Debug -RunWinCredLive
       - name: Assemble reproducible Windows release inputs
         shell: pwsh
@@ -98,14 +101,6 @@ jobs:
           command -v dbus-run-session
           command -v secret-tool
           pkg-config --exists libsecret-1
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ubuntu-cargo-1.97.1-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: ubuntu-cargo-1.97.1-
       - name: Install pinned Rust and musl target
         shell: bash
         run: |
@@ -114,6 +109,10 @@ jobs:
           rustup default 1.97.1
           rustup target add x86_64-unknown-linux-musl --toolchain 1.97.1
           rustc --version | grep -F '1.97.1'
+      - name: Restore Rust compilation and Cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ubuntu-24.04-rust-1.97.1-x86_64-unknown-linux-gnu-musl
       - name: Validate shell contracts
         shell: bash
         run: |
@@ -195,6 +194,11 @@ jobs:
           set -euo pipefail
           rustup toolchain install 1.97.1 --profile minimal
           rustup default 1.97.1
+      - name: Restore Cargo tool cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ubuntu-24.04-rust-1.97.1-cargo-deny-0.20.2-cargo-audit-0.22.2
+          cache-targets: "false"
       - name: Install pinned dependency scanners
         shell: bash
         run: |

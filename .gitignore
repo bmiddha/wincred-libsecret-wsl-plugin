@@ -1,5 +1,6 @@
 # Rust
 /target/
+/target-ci/
 **/*.rs.bk
 
 # CMake and Visual Studio
