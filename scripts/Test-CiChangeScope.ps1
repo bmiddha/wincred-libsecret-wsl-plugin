@@ -100,4 +100,45 @@ Assert-True `
     ($releasePublisher.Contains("token: `${{ steps.app-token.outputs.token }}")) `
     "Release publishing does not authenticate checkout with the GitHub App token."
 
+$hostedWslE2eWorkflow = Get-Content `
+    -LiteralPath (Join-Path $repositoryRoot ".github\workflows\hosted-wsl-e2e.yml") `
+    -Raw
+Assert-True `
+    ($hostedWslE2eWorkflow -match '(?m)^permissions:\r?\n  actions: write\r?\n  contents: read\r?$') `
+    "Hosted WSL E2E must grant the cache action write access while retaining read-only repository contents."
+Assert-True `
+    ($hostedWslE2eWorkflow -notmatch '(?m)^  pull_request:\s*$') `
+    "Hosted WSL E2E must not run for pull requests."
+Assert-True `
+    ($hostedWslE2eWorkflow.Contains("if: github.event.repository.fork == false")) `
+    "Hosted WSL E2E must skip fork repositories."
+
+$releasePublishWorkflow = Get-Content `
+    -LiteralPath (Join-Path $repositoryRoot ".github\workflows\release-publish.yml") `
+    -Raw
+$releaseHostedE2eJob = [regex]::Match(
+    $releasePublishWorkflow,
+    '(?ms)^  hosted-e2e:\r?\n(?<body>.*?)(?=^  \S|\z)'
+)
+Assert-True `
+    $releaseHostedE2eJob.Success `
+    "Release publish must retain its hosted WSL E2E reusable-workflow job."
+$releaseHostedE2eBody = $releaseHostedE2eJob.Groups["body"].Value
+Assert-True `
+    ($releaseHostedE2eBody.Contains("uses: ./.github/workflows/hosted-wsl-e2e.yml")) `
+    "Release publish must call the hosted WSL E2E workflow."
+Assert-True `
+    ($releaseHostedE2eBody.Contains("needs: wait-ci")) `
+    "Release publish must wait for merge CI before running hosted WSL E2E."
+Assert-True `
+    ($releaseHostedE2eBody -match '(?m)^    permissions:\r?\n      actions: write\r?\n      contents: read\r?$') `
+    "Release publish must not downgrade the hosted WSL E2E cache-save permission."
+Assert-True `
+    ($releasePublishWorkflow.Contains("github.event.pull_request.merged == true") -and `
+        $releasePublishWorkflow.Contains("github.event.pull_request.base.ref == github.event.repository.default_branch") -and `
+        $releasePublishWorkflow.Contains("github.event.pull_request.head.repo.full_name == github.repository") -and `
+        $releasePublishWorkflow.Contains("startsWith(github.event.pull_request.head.ref, 'release/v')") -and `
+        $releasePublishWorkflow.Contains("contains(github.event.pull_request.labels.*.name, 'release')")) `
+    "Release publish must restrict hosted WSL E2E to merged same-repository release pull requests."
+
 Write-Host "CI change-scope validation passed."

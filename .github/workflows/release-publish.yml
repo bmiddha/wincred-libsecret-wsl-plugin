@@ -267,6 +267,7 @@ jobs:
     with:
       checkout_ref: ${{ github.event.pull_request.merge_commit_sha }}
     permissions:
+      actions: write
       contents: read
 
   sign-package-publish:
