@@ -108,6 +108,31 @@ Assert-True ($wix.Contains('plugin uninstall --dll "[#PluginDll]"')) "WiX cleanu
 Assert-True ($wix.Contains('Execute="rollback"')) "WiX rollback action is missing."
 Assert-True ($wix.Contains('REMOVE="ALL"')) "WiX uninstall action is missing."
 Assert-True ($wix.Contains('SKIPPLUGINREGISTRATION')) "WiX cannot preserve an existing incompatible WSL security plugin."
+Assert-True ($wix.Contains('Manufacturer="Bharat Middha"')) "WiX manufacturer does not match the MIT copyright holder."
+Assert-True (!$wix.Contains("wincred-libsecret-wsl-plugin contributors")) "WiX contributor metadata does not match the MIT copyright holder."
+$productIcon = $wixXml.SelectSingleNode("/wix:Wix/wix:Package/wix:Icon[@Id='ProductIcon']", $wixNamespace)
+Assert-True ($null -ne $productIcon) "WiX must include the installed-app product icon."
+Assert-True ($productIcon.GetAttribute("SourceFile") -eq '$(var.SourceDir)\assets\logo.ico') "WiX product icon must use the staged project logo."
+$arpProductIcon = $wixXml.SelectSingleNode("/wix:Wix/wix:Package/wix:Property[@Id='ARPPRODUCTICON']", $wixNamespace)
+Assert-True ($null -ne $arpProductIcon -and $arpProductIcon.GetAttribute("Value") -eq "ProductIcon") "WiX must expose the product icon in Installed Apps."
+$expectedArpProperties = [ordered]@{
+        ARPPRODUCTICON = "ProductIcon"
+        ARPCONTACT = "Bharat Middha"
+        ARPCOMMENTS = "Freedesktop Secret Service provider for WSL backed by Windows Credential Manager."
+        ARPURLINFOABOUT = "https://github.com/bmiddha/wincred-libsecret-wsl-plugin"
+        ARPHELPLINK = "https://github.com/bmiddha/wincred-libsecret-wsl-plugin/issues"
+        ARPURLUPDATEINFO = "https://github.com/bmiddha/wincred-libsecret-wsl-plugin/releases"
+    }
+foreach ($property in $expectedArpProperties.GetEnumerator())
+{
+    $node = $wixXml.SelectSingleNode("/wix:Wix/wix:Package/wix:Property[@Id='$($property.Key)']", $wixNamespace)
+    Assert-True ($null -ne $node -and $node.GetAttribute("Value") -eq $property.Value) "WiX $($property.Key) metadata is incorrect."
+}
+$packageAssembler = Get-Content -LiteralPath (Join-Path $PSScriptRoot "Assemble-Package.ps1") -Raw
+Assert-True ($packageAssembler.Contains('@{ Source = "..\assets\logo.ico"; Destination = "assets\logo.ico" }')) "Package staging omits the Installed Apps product icon."
+$notice = Get-Content -LiteralPath (Join-Path $repoRoot "packaging\NOTICE.txt") -Raw
+Assert-True ($notice.Contains("Copyright (c) 2026 Bharat Middha")) "Installer notice does not match the MIT copyright holder."
+Assert-True ($notice.Contains("MIT License")) "Installer notice does not identify the MIT License."
 $machinePathEntry = $wixXml.SelectSingleNode(
     "/wix:Wix/wix:Package/wix:StandardDirectory[@Id='ProgramFiles64Folder']/wix:Directory[@Id='INSTALLFOLDER']/wix:Component[@Id='CommandBinariesComponent']/wix:Environment[@Id='MachinePathEntry']",
     $wixNamespace
@@ -290,6 +315,8 @@ if (![string]::IsNullOrEmpty($MsiPath))
     $view = $null
     $actions = $null
     $environment = $null
+    $properties = $null
+    $icons = $null
     try
     {
         $database = $installer.OpenDatabase(
@@ -356,12 +383,29 @@ if (![string]::IsNullOrEmpty($MsiPath))
             $pathEntry.Name.Contains("*")
         ) "MSI PATH entry must set and remove only the machine PATH value."
         Assert-True ($pathEntry.Value -eq "[~];[INSTALLFOLDER]") "MSI PATH entry must append the CLI directory without replacing PATH."
+
+        foreach ($property in $expectedArpProperties.GetEnumerator())
+        {
+            $properties = $database.OpenView("SELECT ``Value`` FROM ``Property`` WHERE ``Property`` = '$($property.Key)'")
+            $properties.Execute()
+            $record = $properties.Fetch()
+            Assert-True (
+                $null -ne $record -and $record.StringData(1) -eq $property.Value
+            ) "MSI $($property.Key) metadata is incorrect."
+            [void][Runtime.InteropServices.Marshal]::ReleaseComObject($properties)
+            $properties = $null
+        }
+        $icons = $database.OpenView("SELECT ``Name`` FROM ``Icon`` WHERE ``Name`` = 'ProductIcon'")
+        $icons.Execute()
+        Assert-True ($null -ne $icons.Fetch()) "MSI does not contain the product icon stream."
     }
     finally
     {
         if ($null -ne $view) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($view) }
         if ($null -ne $actions) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($actions) }
         if ($null -ne $environment) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($environment) }
+        if ($null -ne $properties) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($properties) }
+        if ($null -ne $icons) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($icons) }
         if ($null -ne $database) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($database) }
         if ($null -ne $installer) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($installer) }
     }

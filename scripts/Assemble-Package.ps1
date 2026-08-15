@@ -66,6 +66,7 @@ if ($Prepare)
         @{ Source = "linux\wincred-libsecret-refresh.service"; Destination = "linux\wincred-libsecret-refresh.service" },
         @{ Source = "linux\wincred-libsecret-interop.service"; Destination = "linux\wincred-libsecret-interop.service" },
         @{ Source = "linux\manifest.sha256"; Destination = "linux\manifest.sha256" },
+        @{ Source = "..\assets\logo.ico"; Destination = "assets\logo.ico" },
         @{ Source = "..\LICENSE"; Destination = "licenses\LICENSE.txt" },
         @{ Source = "..\packaging\NOTICE.txt"; Destination = "licenses\NOTICE.txt" }
     )

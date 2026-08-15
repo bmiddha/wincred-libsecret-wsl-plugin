@@ -1,7 +1,7 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
       Name="WinCred Libsecret WSL Plugin"
-      Manufacturer="wincred-libsecret-wsl-plugin contributors"
+      Manufacturer="Bharat Middha"
       Version="$(var.ProductVersion)"
       UpgradeCode="{A81A96E1-14E9-43F8-BAE1-7C88BE7A6B5C}"
       Language="1033"
@@ -11,9 +11,13 @@
         DowngradeErrorMessage="A newer version of WinCred Libsecret WSL Plugin is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
-    <Property Id="ARPCONTACT" Value="wincred-libsecret-wsl-plugin contributors" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/wincred-libsecret-wsl-plugin/wincred-libsecret-wsl-plugin" />
-    <Property Id="ARPHELPLINK" Value="https://github.com/wincred-libsecret-wsl-plugin/wincred-libsecret-wsl-plugin/issues" />
+    <Icon Id="ProductIcon" SourceFile="$(var.SourceDir)\assets\logo.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ProductIcon" />
+    <Property Id="ARPCONTACT" Value="Bharat Middha" />
+    <Property Id="ARPCOMMENTS" Value="Freedesktop Secret Service provider for WSL backed by Windows Credential Manager." />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/bmiddha/wincred-libsecret-wsl-plugin" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/bmiddha/wincred-libsecret-wsl-plugin/issues" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/bmiddha/wincred-libsecret-wsl-plugin/releases" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="SKIPPLUGINREGISTRATION" Secure="yes" />
 
