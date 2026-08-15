@@ -1,7 +1,7 @@
 WinCred Libsecret WSL Plugin
-Copyright (c) 2026 wincred-libsecret-wsl-plugin contributors
+Copyright (c) 2026 Bharat Middha
 
-This distribution is licensed under the MIT License in LICENSE.txt.
+This distribution is licensed under the MIT License. See LICENSE.txt.
 
 The release dependency inventory is generated from the locked Cargo workspace
 as dependency-metadata.json. It records package names, versions, licenses, and
