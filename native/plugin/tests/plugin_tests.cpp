@@ -235,12 +235,18 @@ WSLDistributionInformation TestDistribution() noexcept
     return distribution;
 }
 
+// Covers ConfigurePluginHooks across the WSLPluginHooksV1 layouts the plugin
+// has to tolerate, plus the argument validation failures. Every phase asserts
+// that hooks absent from the runtime's layout are left untouched, because
+// writing past the runtime's allocation would corrupt WSL's memory.
 void TestVersionGatingAndHookRegistration()
 {
     constexpr char test_name[] = "version gating and hook registration";
     WSLPluginAPIV1 api = {};
     api.ExecuteBinaryInDistribution = &CaptureExecuteBinaryInDistribution;
 
+    // 2.0.0 is unsupported and its layout has none of the later hooks, so the
+    // request is rejected and the caller-provided hooks stay as they were.
     WSLPluginHooksV1 hooks = {};
     api.Version = {2, 0, 0};
     hooks.OnDistributionRegistered = &TestDistributionRegistered;
@@ -265,6 +271,8 @@ void TestVersionGatingAndHookRegistration()
     CHECK(test_name, hooks.ImageCreated == &TestImageCreated);
     CHECK(test_name, hooks.ImageDeleted == &TestImageDeleted);
 
+    // 2.7.11 is supported and includes the registration hooks, but not the WSLc
+    // hooks added in 2.9.0, so only the former may be cleared.
     api.Version = {2, 7, 11};
     hooks = {};
     hooks.OnDistributionRegistered = &TestDistributionRegistered;
@@ -294,6 +302,8 @@ void TestVersionGatingAndHookRegistration()
     CHECK(test_name, hooks.ImageCreated == &TestImageCreated);
     CHECK(test_name, hooks.ImageDeleted == &TestImageDeleted);
 
+    // 2.9.0 grew the struct, so the WSLc hooks are now in range and are cleared
+    // as well.
     api.Version = {2, 9, 0};
     CHECK(
         test_name,
@@ -305,6 +315,8 @@ void TestVersionGatingAndHookRegistration()
     CHECK(test_name, hooks.ImageCreated == nullptr);
     CHECK(test_name, hooks.ImageDeleted == nullptr);
 
+    // 2.5.0 is below the supported floor, so registration must be rejected
+    // without leaving a dangling hook behind.
     api.Version = {2, 5, 0};
     hooks.OnDistributionStarted = &TestDistributionStarted;
     const HRESULT rejected = wincred::plugin::ConfigurePluginHooks(
@@ -320,6 +332,8 @@ void TestVersionGatingAndHookRegistration()
     CHECK(test_name, wincred::plugin::IsSupportedWslRuntime({2, 6, 0}));
     CHECK(test_name, !wincred::plugin::IsSupportedWslRuntime({1, 99, 99}));
 
+    // Missing arguments and a missing ExecuteBinaryInDistribution entry point
+    // are configuration errors rather than version failures.
     hooks.OnDistributionStarted = &TestDistributionStarted;
     CHECK(
         test_name,
