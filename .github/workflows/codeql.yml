@@ -31,6 +31,9 @@ jobs:
       - name: Validate change-scope classifier
         shell: pwsh
         run: .\scripts\Test-CiChangeScope.ps1
+      - name: Validate release tag helper
+        shell: pwsh
+        run: .\scripts\Test-ReleaseTag.ps1
       - name: Validate tracked workflow scripts
         shell: pwsh
         run: .\scripts\Test-WorkflowScripts.ps1

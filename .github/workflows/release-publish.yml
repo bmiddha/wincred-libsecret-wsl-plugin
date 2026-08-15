@@ -115,12 +115,10 @@ jobs:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-contents: write
-          permission-workflows: write
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
       - name: Install pinned git-cliff
         uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2
         with:
@@ -247,9 +245,10 @@ jobs:
       - name: Create annotated release tag
         shell: pwsh
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           RELEASE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
           TAG: ${{ steps.version.outputs.tag }}
-        run: .\scripts\release\New-ReleaseTag.ps1
+        run: .\scripts\release\New-ReleaseTag.ps1 -Repository $env:GITHUB_REPOSITORY -Tag $env:TAG -ReleaseSha $env:RELEASE_SHA
       - name: Generate conventional release notes
         shell: pwsh
         env:

@@ -82,6 +82,9 @@ foreach ($workflowName in @("ci.yml", "codeql.yml"))
     Assert-True `
         ($workflow.Contains(".\scripts\Test-WorkflowScripts.ps1")) `
         "$workflowName does not run tracked workflow script syntax validation."
+    Assert-True `
+        ($workflow.Contains(".\scripts\Test-ReleaseTag.ps1")) `
+        "$workflowName does not validate the Git Data API release tag helper."
 }
 
 $codeqlWorkflow = Get-Content `
@@ -105,6 +108,7 @@ Assert-True `
 $releasePublisher = Get-Content `
     -LiteralPath (Join-Path $repositoryRoot ".github\workflows\release-publish.yml") `
     -Raw
+$releaseTagScript = Join-Path $repositoryRoot "scripts\release\New-ReleaseTag.ps1"
 Assert-True `
     ($releasePublisher.Contains("id: app-token")) `
     "Release publishing does not mint the GitHub App token required to create protected tags."
@@ -115,11 +119,40 @@ Assert-True `
     ($releasePublisher.Contains("permission-contents: write")) `
     "Release publishing does not request the GitHub App Contents permission required to create tags."
 Assert-True `
-    ($releasePublisher.Contains("permission-workflows: write")) `
-    "Release publishing does not request the GitHub App Workflows permission required to create tags."
+    (!$releasePublisher.Contains("permission-workflows: write")) `
+    "Release publishing must not request GitHub App permission to modify workflow files for tag creation."
 Assert-True `
-    ($releasePublisher.Contains("token: `${{ steps.app-token.outputs.token }}")) `
-    "Release publishing does not authenticate checkout with the GitHub App token."
+    ($releasePublisher.Contains("GH_TOKEN: `${{ steps.app-token.outputs.token }}")) `
+    "Release publishing does not scope the GitHub App token to annotated tag creation."
+Assert-True `
+    ($releasePublisher.Contains('.\scripts\release\New-ReleaseTag.ps1 -Repository $env:GITHUB_REPOSITORY -Tag $env:TAG -ReleaseSha $env:RELEASE_SHA')) `
+    "Release publishing does not call the Git Data API tag helper."
+Assert-True `
+    (Test-Path -LiteralPath $releaseTagScript -PathType Leaf) `
+    "Release publishing is missing the Git Data API tag helper."
+Assert-True `
+    (!(Test-Path -LiteralPath (Join-Path $repositoryRoot "scripts\New-ReleaseTag.ps1") -PathType Leaf)) `
+    "Release publishing must keep a single Git Data API tag helper."
+$releaseTagSource = Get-Content -LiteralPath $releaseTagScript -Raw
+Assert-True `
+    ($releaseTagSource.Contains("git/tags")) `
+    "Release tag helper does not create an annotated Git tag object."
+Assert-True `
+    ($releaseTagSource.Contains("git/refs")) `
+    "Release tag helper does not create the release tag reference."
+Assert-True `
+    ($releaseTagSource.Contains("matching-refs/tags")) `
+    "Release tag helper does not safely inspect existing tag references."
+$tokens = $null
+$parseErrors = $null
+[System.Management.Automation.Language.Parser]::ParseFile(
+    $releaseTagScript,
+    [ref]$tokens,
+    [ref]$parseErrors
+) | Out-Null
+Assert-True `
+    ($parseErrors.Count -eq 0) `
+    "Release tag helper contains PowerShell syntax errors: $((@($parseErrors | ForEach-Object { $_.Message }) -join '; '))."
 
 $hostedWslE2eWorkflow = Get-Content `
     -LiteralPath (Join-Path $repositoryRoot ".github\workflows\hosted-wsl-e2e.yml") `
