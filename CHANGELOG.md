@@ -24,6 +24,8 @@ from [Conventional Commits](https://www.conventionalcommits.org) by
 
 - *(release)* Create tags through Git API ([6b59015](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/6b59015e29d8077c62d4820893e2796e7b115ed6))
 
+- *(release)* Check out merge CI helper ([ea62e89](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/ea62e89cbe88c2043c90ec597dcd8c9eee86ada2))
+
 
 ### Documentation
 
