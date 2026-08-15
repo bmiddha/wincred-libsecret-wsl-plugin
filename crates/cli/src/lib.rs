@@ -158,7 +158,7 @@ pub struct DoctorFinding {
     pub check: &'static str,
     pub ok: bool,
     pub detail: String,
-    pub remedy: Option<&'static str>,
+    pub remedy: Option<String>,
 }
 
 impl DoctorFinding {
@@ -173,12 +173,12 @@ impl DoctorFinding {
     }
 
     #[must_use]
-    pub fn fail(check: &'static str, detail: impl Into<String>, remedy: &'static str) -> Self {
+    pub fn fail(check: &'static str, detail: impl Into<String>, remedy: impl Into<String>) -> Self {
         Self {
             check,
             ok: false,
             detail: detail.into(),
-            remedy: Some(remedy),
+            remedy: Some(remedy.into()),
         }
     }
 }

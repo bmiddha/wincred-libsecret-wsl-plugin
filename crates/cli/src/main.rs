@@ -4,6 +4,7 @@ use std::{
     ffi::OsString,
     fmt::Write,
     fs, io,
+    mem::size_of,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
@@ -21,6 +22,19 @@ use wincred_libsecret_protocol::PROTOCOL_VERSION;
 
 #[cfg(windows)]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+#[cfg(windows)]
+use windows::{
+    Win32::{
+        Foundation::HWND,
+        Security::WinTrust::{
+            WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO,
+            WTD_CHOICE_FILE, WTD_REVOKE_WHOLECHAIN, WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY,
+            WTD_UI_NONE, WinVerifyTrustEx,
+        },
+    },
+    core::PCWSTR,
+};
 
 #[cfg(windows)]
 use winreg::{
@@ -146,6 +160,28 @@ struct Distribution {
     version: Option<u32>,
 }
 
+#[cfg(windows)]
+#[derive(Debug)]
+struct DistributionDiagnostics {
+    name: String,
+    enabled: Option<bool>,
+    wsl2: bool,
+    runtime_ok: bool,
+    findings: Vec<DoctorFinding>,
+}
+
+#[cfg(windows)]
+impl DistributionDiagnostics {
+    fn state(&self) -> &'static str {
+        match self.enabled {
+            Some(true) if self.wsl2 && self.runtime_ok => "enabled, working",
+            Some(true) => "enabled, degraded",
+            Some(false) => "disabled, degraded",
+            None => "enablement unknown, degraded",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ProcessResult {
     success: bool,
@@ -172,7 +208,6 @@ impl ProcessResult {
 enum SignatureStatus {
     Valid,
     NotValid,
-    Unavailable,
 }
 
 impl std::fmt::Display for SignatureStatus {
@@ -180,7 +215,6 @@ impl std::fmt::Display for SignatureStatus {
         match self {
             Self::Valid => formatter.write_str("Valid"),
             Self::NotValid => formatter.write_str("not valid"),
-            Self::Unavailable => formatter.write_str("unavailable"),
         }
     }
 }
@@ -570,18 +604,21 @@ fn doctor(arguments: DoctorArguments) -> Result<()> {
     } else {
         enumerate_distributions()?
     };
-    for distribution in distributions {
-        findings.extend(distribution_findings(&distribution));
-    }
+    let distributions = distributions
+        .iter()
+        .map(distribution_findings)
+        .collect::<Vec<_>>();
 
-    let failures = findings.iter().filter(|finding| !finding.ok).count();
-    for finding in &findings {
-        let status = if finding.ok { "OK" } else { "FAIL" };
-        println!("[{status}] {}: {}", finding.check, finding.detail);
-        if let Some(remedy) = finding.remedy {
-            println!("       remedy: {remedy}");
-        }
-    }
+    let failures = findings
+        .iter()
+        .chain(
+            distributions
+                .iter()
+                .flat_map(|distribution| distribution.findings.iter()),
+        )
+        .filter(|finding| !finding.ok)
+        .count();
+    print!("{}", format_doctor_report(&findings, &distributions));
     if failures > 0 {
         bail!("{failures} diagnostic check(s) failed");
     }
@@ -649,7 +686,7 @@ fn plugin_findings() -> Result<Vec<DoctorFinding>> {
     if path.is_file() {
         findings.push(match signature_status(&path) {
             SignatureStatus::Valid => DoctorFinding::ok("plugin-signature", "Authenticode Valid"),
-            status => DoctorFinding::fail(
+            status @ SignatureStatus::NotValid => DoctorFinding::fail(
                 "plugin-signature",
                 status.to_string(),
                 "Install a signed release DLL.",
@@ -660,49 +697,134 @@ fn plugin_findings() -> Result<Vec<DoctorFinding>> {
 }
 
 #[cfg(windows)]
-fn distribution_findings(distribution: &Distribution) -> Vec<DoctorFinding> {
+fn format_doctor_report(
+    findings: &[DoctorFinding],
+    distributions: &[DistributionDiagnostics],
+) -> String {
+    let mut report = String::new();
+    append_doctor_findings(&mut report, findings, None);
+    for distribution in distributions {
+        let _ = writeln!(
+            report,
+            "[DISTRO] {}: {}",
+            distribution.name,
+            distribution.state()
+        );
+        append_doctor_findings(
+            &mut report,
+            &distribution.findings,
+            Some(&distribution.name),
+        );
+    }
+    report
+}
+
+#[cfg(windows)]
+fn append_doctor_findings(
+    report: &mut String,
+    findings: &[DoctorFinding],
+    distribution: Option<&str>,
+) {
+    for finding in findings {
+        let status = if finding.ok { "OK" } else { "FAIL" };
+        let check = distribution.map_or_else(
+            || finding.check.to_owned(),
+            |name| format!("{} ({name})", finding.check),
+        );
+        let _ = writeln!(report, "[{status}] {check}: {}", finding.detail);
+        if let Some(remedy) = &finding.remedy {
+            let _ = writeln!(report, "       remedy: {remedy}");
+        }
+    }
+}
+
+#[cfg(windows)]
+fn distribution_findings(distribution: &Distribution) -> DistributionDiagnostics {
+    distribution_diagnostics(
+        distribution,
+        distribution_enabled(distribution.id).map_err(|error| error.to_string()),
+        remote_doctor(&distribution.name).map_err(|error| error.to_string()),
+    )
+}
+
+#[cfg(windows)]
+fn distribution_diagnostics(
+    distribution: &Distribution,
+    enablement: Result<bool, String>,
+    remote: Result<ProcessResult, String>,
+) -> DistributionDiagnostics {
     let mut findings = Vec::new();
     findings.push(if distribution.version == Some(2) {
-        DoctorFinding::ok(
-            "distro-wsl2",
-            format!("{} ({}) is WSL 2", distribution.name, distribution.id),
-        )
+        DoctorFinding::ok("distro-wsl2", format!("WSL 2 ({})", distribution.id))
     } else {
         DoctorFinding::fail(
             "distro-wsl2",
             format!(
-                "{} is WSL {}",
-                distribution.name,
+                "WSL {}",
                 distribution
                     .version
                     .map_or_else(|| "unknown".to_owned(), |version| version.to_string())
             ),
-            "Convert the distribution with `wsl --set-version <name> 2`.",
+            format!(
+                "Convert the distribution with `wsl --set-version {:?} 2`.",
+                distribution.name
+            ),
         )
     });
-    match distribution_enabled(distribution.id) {
-        Ok(true) => findings.push(DoctorFinding::ok(
-            "distro-enablement",
-            "HKCU enablement is set",
-        )),
-        Ok(false) => findings.push(DoctorFinding::fail(
-            "distro-enablement",
-            "HKCU enablement is absent",
-            "Run `wincred-libsecret distro enable <name>`.",
-        )),
-        Err(error) => findings.push(DoctorFinding::fail(
-            "distro-enablement",
-            error.to_string(),
-            "Check the current-user registry permissions.",
-        )),
+    let enabled = match enablement {
+        Ok(true) => {
+            findings.push(DoctorFinding::ok(
+                "distro-enablement",
+                "enabled: HKCU enablement is set",
+            ));
+            Some(true)
+        }
+        Ok(false) => {
+            findings.push(DoctorFinding::fail(
+                "distro-enablement",
+                "disabled: HKCU enablement is absent",
+                distro_enable_remedy(&distribution.name),
+            ));
+            Some(false)
+        }
+        Err(error) => {
+            findings.push(DoctorFinding::fail(
+                "distro-enablement",
+                error.clone(),
+                "Check the current-user registry permissions.",
+            ));
+            None
+        }
+    };
+    findings.extend(runtime_findings(distribution, remote));
+    let runtime_ok = findings
+        .iter()
+        .filter(|finding| finding.check == "distro-runtime")
+        .all(|finding| finding.ok);
+    DistributionDiagnostics {
+        name: distribution.name.clone(),
+        enabled,
+        wsl2: distribution.version == Some(2),
+        runtime_ok,
+        findings,
     }
-    match remote_doctor(&distribution.name) {
+}
+
+#[cfg(windows)]
+fn runtime_findings(
+    distribution: &Distribution,
+    remote: Result<ProcessResult, String>,
+) -> Vec<DoctorFinding> {
+    let mut findings = Vec::new();
+    match remote {
         Ok(result) if result.success => {
+            let mut has_diagnostics = false;
             for line in result
                 .stdout
                 .lines()
                 .filter(|line| line.starts_with("CHECK "))
             {
+                has_diagnostics = true;
                 let mut fields = line.splitn(3, ' ');
                 let _ = fields.next();
                 let check = fields.next().unwrap_or("distro");
@@ -716,30 +838,49 @@ fn distribution_findings(distribution: &Distribution) -> Vec<DoctorFinding> {
                     findings.push(DoctorFinding::fail(
                         "distro-runtime",
                         format!("{check}: {detail}"),
-                        "Run `wincred-libsecret distro enable <name>` after resolving the reported prerequisite.",
+                        format!(
+                            "Run {} after resolving the reported prerequisite.",
+                            distro_enable_command(&distribution.name)
+                        ),
                     ));
                 }
             }
-            if !result.stdout.contains("CHECK ") {
+            if !has_diagnostics {
                 findings.push(DoctorFinding::fail(
                     "distro-runtime",
                     "the installed refresh helper returned no diagnostics",
-                    "Re-run `wincred-libsecret distro enable <name>` to repair the installation.",
+                    format!(
+                        "Re-run {} to repair the installation.",
+                        distro_enable_command(&distribution.name)
+                    ),
                 ));
             }
         }
         Ok(result) => findings.push(DoctorFinding::fail(
             "distro-runtime",
             result.display_error(),
-            "Run `wincred-libsecret distro enable <name>` to provision the distribution.",
+            distro_enable_remedy(&distribution.name),
         )),
         Err(error) => findings.push(DoctorFinding::fail(
             "distro-runtime",
-            error.to_string(),
-            "Start the distribution with `wsl -d <name>` and retry.",
+            error,
+            format!(
+                "Start the distribution with `wsl -d {:?}` and retry.",
+                distribution.name
+            ),
         )),
     }
     findings
+}
+
+#[cfg(windows)]
+fn distro_enable_command(distribution: &str) -> String {
+    format!("`wincred-libsecret distro enable {distribution:?}`")
+}
+
+#[cfg(windows)]
+fn distro_enable_remedy(distribution: &str) -> String {
+    format!("Run {}.", distro_enable_command(distribution))
 }
 
 #[cfg(windows)]
@@ -1010,26 +1151,49 @@ fn require_administrator() -> Result<()> {
 
 #[cfg(windows)]
 fn signature_status(path: &Path) -> SignatureStatus {
-    // PowerShell joins arguments after -Command into source text, so passing a
-    // path as a trailing argument breaks on normal Windows paths. Bind the
-    // literal path through a process-local environment variable instead.
-    let result = Command::new("powershell.exe")
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "(Get-AuthenticodeSignature -LiteralPath $env:WINCRED_SIGNATURE_PATH).Status.ToString()",
-        ])
-        .env("WINCRED_SIGNATURE_PATH", path)
-        .output()
-        .map(process_result);
-    match result {
-        Ok(result) if result.success && result.stdout.trim().eq_ignore_ascii_case("valid") => {
-            SignatureStatus::Valid
-        }
-        Ok(result) if result.success => SignatureStatus::NotValid,
-        _ => SignatureStatus::Unavailable,
+    let path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let file_info_size = u32::try_from(size_of::<WINTRUST_FILE_INFO>())
+        .expect("WINTRUST_FILE_INFO is smaller than u32::MAX");
+    let trust_data_size =
+        u32::try_from(size_of::<WINTRUST_DATA>()).expect("WINTRUST_DATA is smaller than u32::MAX");
+    let mut file_info = WINTRUST_FILE_INFO {
+        cbStruct: file_info_size,
+        pcwszFilePath: PCWSTR(path.as_ptr()),
+        ..Default::default()
+    };
+    let mut trust_data = WINTRUST_DATA {
+        cbStruct: trust_data_size,
+        dwUIChoice: WTD_UI_NONE,
+        fdwRevocationChecks: WTD_REVOKE_WHOLECHAIN,
+        dwUnionChoice: WTD_CHOICE_FILE,
+        Anonymous: WINTRUST_DATA_0 {
+            pFile: &raw mut file_info,
+        },
+        dwStateAction: WTD_STATEACTION_VERIFY,
+        ..Default::default()
+    };
+    let mut verify_action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    #[allow(unsafe_code)]
+    let result =
+        unsafe { WinVerifyTrustEx(HWND::default(), &raw mut verify_action, &raw mut trust_data) };
+
+    trust_data.dwStateAction = WTD_STATEACTION_CLOSE;
+    #[allow(unsafe_code)]
+    let _ =
+        unsafe { WinVerifyTrustEx(HWND::default(), &raw mut verify_action, &raw mut trust_data) };
+    signature_status_from_winverifytrust(result)
+}
+
+#[cfg(windows)]
+fn signature_status_from_winverifytrust(result: i32) -> SignatureStatus {
+    if result == 0 {
+        SignatureStatus::Valid
+    } else {
+        SignatureStatus::NotValid
     }
 }
 
@@ -1196,7 +1360,13 @@ fn registry_string(key: &RegKey, name: &str) -> Result<Option<String>> {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{decode_process_output, normalize_windows_path, windows_paths_equal};
+    use uuid::Uuid;
+
+    use super::{
+        Distribution, ProcessResult, SignatureStatus, decode_process_output,
+        distribution_diagnostics, format_doctor_report, normalize_windows_path, signature_status,
+        signature_status_from_winverifytrust, windows_paths_equal,
+    };
 
     #[test]
     fn decodes_utf8_process_output() {
@@ -1222,5 +1392,90 @@ mod tests {
             Path::new(r"\\?\C:\Program Files\WinCredLibsecret\a.dll"),
             Path::new(r"c:\program files\wincredlibsecret\a.dll")
         ));
+    }
+
+    #[test]
+    fn winverifytrust_success_identifies_a_signed_plugin_as_valid() {
+        assert_eq!(
+            signature_status_from_winverifytrust(0),
+            SignatureStatus::Valid
+        );
+        assert_eq!(
+            signature_status_from_winverifytrust(i32::MIN),
+            SignatureStatus::NotValid
+        );
+    }
+
+    #[test]
+    fn winverifytrust_validates_a_signed_windows_binary() {
+        let system_root = std::env::var_os("SystemRoot").expect("Windows defines SystemRoot");
+        let kernel32 = PathBuf::from(system_root).join(r"System32\kernel32.dll");
+        assert_eq!(signature_status(&kernel32), SignatureStatus::Valid);
+
+        let installed_plugin =
+            PathBuf::from(r"C:\Program Files\WinCredLibsecret\wincred-libsecret-wsl-plugin.dll");
+        if installed_plugin.is_file() {
+            assert_eq!(signature_status(&installed_plugin), SignatureStatus::Valid);
+        }
+    }
+
+    #[test]
+    fn doctor_report_attributes_multiple_distros_and_names_enable_remedies() {
+        let docker_desktop = Distribution {
+            id: Uuid::from_u128(1),
+            name: "docker-desktop".to_owned(),
+            version: Some(2),
+        };
+        let ubuntu = Distribution {
+            id: Uuid::from_u128(2),
+            name: "Ubuntu 24.04".to_owned(),
+            version: Some(2),
+        };
+        let fedora = Distribution {
+            id: Uuid::from_u128(3),
+            name: "Fedora".to_owned(),
+            version: Some(2),
+        };
+        let docker_desktop = distribution_diagnostics(
+            &docker_desktop,
+            Ok(false),
+            Ok(ProcessResult {
+                success: false,
+                stdout: String::new(),
+                stderr: "refresh helper is absent".to_owned(),
+            }),
+        );
+        let ubuntu = distribution_diagnostics(
+            &ubuntu,
+            Ok(true),
+            Ok(ProcessResult {
+                success: true,
+                stdout: "CHECK payload failed manifest mismatch\n".to_owned(),
+                stderr: String::new(),
+            }),
+        );
+        let fedora = distribution_diagnostics(
+            &fedora,
+            Ok(true),
+            Ok(ProcessResult {
+                success: true,
+                stdout: "CHECK payload ok manifest verified\n".to_owned(),
+                stderr: String::new(),
+            }),
+        );
+
+        let report = format_doctor_report(&[], &[docker_desktop, ubuntu, fedora]);
+
+        assert!(report.contains("[DISTRO] docker-desktop: disabled, degraded"));
+        assert!(report.contains("[DISTRO] Ubuntu 24.04: enabled, degraded"));
+        assert!(report.contains("[DISTRO] Fedora: enabled, working"));
+        assert!(report.contains("[FAIL] distro-enablement (docker-desktop): disabled:"));
+        assert!(report.contains("[FAIL] distro-runtime (Ubuntu 24.04): payload: failed"));
+        assert!(report.contains("Run `wincred-libsecret distro enable \"docker-desktop\"`."));
+        assert!(
+            report
+                .contains("Run `wincred-libsecret distro enable \"Ubuntu 24.04\"` after resolving")
+        );
+        assert!(!report.contains("<name>"));
     }
 }
