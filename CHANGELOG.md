@@ -12,9 +12,23 @@ from [Conventional Commits](https://www.conventionalcommits.org) by
 - Add project branding assets ([e4a5972](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/e4a597277239d6edc77babf0ecb5deb1287dff48))
 
 
+### Bug fixes
+
+- *(release)* Authenticate protected tag creation ([f99b521](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/f99b521c0442182353743e8c8213a79f81228c46))
+
+- *(release)* Preflight tag token permissions ([fd5de61](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/fd5de61aba340062ec20ddcba0ec29b07ffe5533))
+
+
 ### Documentation
 
 - *(release)* Correct Azure OIDC subject ([927af86](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/927af86e6393dff73b9d4cf222632d0f5f2b6591))
+
+
+### CI and build
+
+- Skip full validation for non-code changes ([5a13fef](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/5a13fefea3b33a7f7f8dcd5094ba7307efe29ddc))
+
+- Preserve full validation for main commits ([901e0c8](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/901e0c8fdf900991ac94743e538a38e322279f37))
 
 
 
