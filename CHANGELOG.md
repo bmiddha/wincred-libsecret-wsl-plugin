@@ -18,6 +18,12 @@ from [Conventional Commits](https://www.conventionalcommits.org) by
 
 - *(release)* Preflight tag token permissions ([fd5de61](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/fd5de61aba340062ec20ddcba0ec29b07ffe5533))
 
+- *(ci)* Permit trusted hosted WSL cache saves ([c5dfa39](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/c5dfa39304659bd611da0ff43e5e3c433d5f10b5))
+
+- *(ci)* Avoid syntax-check bytecode artifacts ([6950a5d](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/6950a5d2c0eaa80ae199c0965aeb428a4ed45158))
+
+- *(release)* Create tags through Git API ([6b59015](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/6b59015e29d8077c62d4820893e2796e7b115ed6))
+
 
 ### Documentation
 
@@ -29,6 +35,10 @@ from [Conventional Commits](https://www.conventionalcommits.org) by
 - Skip full validation for non-code changes ([5a13fef](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/5a13fefea3b33a7f7f8dcd5094ba7307efe29ddc))
 
 - Preserve full validation for main commits ([901e0c8](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/901e0c8fdf900991ac94743e538a38e322279f37))
+
+- Cache Rust compilation artifacts ([bdef261](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/bdef261b7f1ea025b5f42af6c020339e3a740507))
+
+- Extract workflow scripts for static checks ([dcdf0de](https://github.com/bmiddha/wincred-libsecret-wsl-plugin/commit/dcdf0de67476463325f21175ed6db42a430452f6))
 
 
 
