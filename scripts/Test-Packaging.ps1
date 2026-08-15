@@ -86,6 +86,8 @@ else
 $wixPath = Join-Path $repoRoot "packaging\wix\Product.wxs"
 $wix = Get-Content -LiteralPath $wixPath -Raw
 [xml]$wixXml = $wix
+$wixNamespace = [Xml.XmlNamespaceManager]::new($wixXml.NameTable)
+$wixNamespace.AddNamespace("wix", "http://wixtoolset.org/schemas/v4/wxs")
 Assert-True ($wix -match 'UpgradeCode="\{A81A96E1-14E9-43F8-BAE1-7C88BE7A6B5C\}"') "WiX UpgradeCode changed unexpectedly."
 foreach ($componentGuid in @(
     "86C3E780-770B-4775-8521-EC2B3A99E812",
@@ -106,6 +108,17 @@ Assert-True ($wix.Contains('plugin uninstall --dll "[#PluginDll]"')) "WiX cleanu
 Assert-True ($wix.Contains('Execute="rollback"')) "WiX rollback action is missing."
 Assert-True ($wix.Contains('REMOVE="ALL"')) "WiX uninstall action is missing."
 Assert-True ($wix.Contains('SKIPPLUGINREGISTRATION')) "WiX cannot preserve an existing incompatible WSL security plugin."
+$machinePathEntry = $wixXml.SelectSingleNode(
+    "/wix:Wix/wix:Package/wix:StandardDirectory[@Id='ProgramFiles64Folder']/wix:Directory[@Id='INSTALLFOLDER']/wix:Component[@Id='CommandBinariesComponent']/wix:Environment[@Id='MachinePathEntry']",
+    $wixNamespace
+)
+Assert-True ($null -ne $machinePathEntry) "WiX must add the CLI directory through the command-binary component."
+Assert-True ($machinePathEntry.GetAttribute("Name") -eq "PATH") "WiX PATH entry targets the wrong environment variable."
+Assert-True ($machinePathEntry.GetAttribute("Value") -eq "[INSTALLFOLDER]") "WiX PATH entry does not use the installed CLI directory."
+Assert-True ($machinePathEntry.GetAttribute("Action") -eq "set") "WiX PATH entry must update, not replace, PATH."
+Assert-True ($machinePathEntry.GetAttribute("Part") -eq "last") "WiX PATH entry must append to PATH."
+Assert-True ($machinePathEntry.GetAttribute("Permanent") -eq "no") "WiX PATH entry must be removed on uninstall."
+Assert-True ($machinePathEntry.GetAttribute("System") -eq "yes") "WiX PATH entry must target the machine environment."
 
 $cliLibrary = Get-Content -LiteralPath (Join-Path $repoRoot "crates\cli\src\lib.rs") -Raw
 $cliMain = Get-Content -LiteralPath (Join-Path $repoRoot "crates\cli\src\main.rs") -Raw
@@ -276,6 +289,7 @@ if (![string]::IsNullOrEmpty($MsiPath))
     $database = $null
     $view = $null
     $actions = $null
+    $environment = $null
     try
     {
         $database = $installer.OpenDatabase(
@@ -314,15 +328,44 @@ if (![string]::IsNullOrEmpty($MsiPath))
         {
             Assert-True ($customActions -contains $expected) "MSI is missing expected custom action '$expected'."
         }
+
+        $environment = $database.OpenView("SELECT ``Environment``, ``Name``, ``Value``, ``Component_`` FROM ``Environment``")
+        $environment.Execute()
+        $pathEntries = [System.Collections.Generic.List[object]]::new()
+        while ($null -ne ($record = $environment.Fetch()))
+        {
+            $name = $record.StringData(2)
+            if ($name.TrimStart([char[]]"=-*") -eq "PATH")
+            {
+                $pathEntries.Add([PSCustomObject]@{
+                    Id = $record.StringData(1)
+                    Name = $name
+                    Value = $record.StringData(3)
+                    Component = $record.StringData(4)
+                })
+            }
+        }
+        Assert-True ($pathEntries.Count -eq 1) "MSI must contain exactly one CLI machine PATH entry."
+        $pathEntry = $pathEntries[0]
+        Assert-True ($pathEntry.Id -eq "MachinePathEntry") "MSI PATH entry has an unexpected identifier."
+        Assert-True ($pathEntry.Component -eq "CommandBinariesComponent") "MSI PATH entry is not owned by the CLI component."
+        Assert-True (
+            $pathEntry.Name.TrimStart([char[]]"=-*") -eq "PATH" -and
+            $pathEntry.Name.Contains("=") -and
+            $pathEntry.Name.Contains("-") -and
+            $pathEntry.Name.Contains("*")
+        ) "MSI PATH entry must set and remove only the machine PATH value."
+        Assert-True ($pathEntry.Value -eq "[~];[INSTALLFOLDER]") "MSI PATH entry must append the CLI directory without replacing PATH."
     }
     finally
     {
         if ($null -ne $view) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($view) }
         if ($null -ne $actions) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($actions) }
+        if ($null -ne $environment) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($environment) }
         if ($null -ne $database) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($database) }
         if ($null -ne $installer) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($installer) }
     }
-    Write-Host "Validated MSI payload and guarded registration actions: $MsiPath"
+    Write-Host "Validated MSI payload, guarded registration actions, and machine PATH entry: $MsiPath"
 }
 
 Write-Host "Packaging source validation passed."
