@@ -55,7 +55,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 
 $parseErrors = @()
 $powerShellScripts = @(
-    Get-ChildItem -LiteralPath $PSScriptRoot -Filter "*.ps1" -File
+    Get-ChildItem -LiteralPath $PSScriptRoot -Filter "*.ps1" -File -Recurse
     Get-Item -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) "install.ps1")
 )
 $powerShellScripts | ForEach-Object {
@@ -191,6 +191,8 @@ Assert-True (!$releaseInstaller.Contains("Import-Certificate")) "Release install
 Assert-True ($releaseInstaller.Contains("Get-AuthenticodeSignature")) "Release installer does not validate the MSI signature."
 Assert-True ($releaseInstaller.Contains("msiexec.exe")) "Release installer does not install the MSI."
 $releasePublishWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot ".github\workflows\release-publish.yml") -Raw
+$releaseChangeValidator = Get-Content -LiteralPath (Join-Path $PSScriptRoot "release\test-release-change.py") -Raw
+$releaseSigningMetadataScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot "release\Write-ReleaseSigningMetadata.ps1") -Raw
 Assert-True (!$releasePublishWorkflow.Contains("RELEASE_SIGNING_CERTIFICATE_")) "Release workflow must not use a persistent publisher PFX."
 Assert-True (!$releasePublishWorkflow.Contains("publisher-certificate.json")) "Release workflow must not use a committed publisher certificate."
 Assert-True (!$releasePublishWorkflow.Contains("New-DevSigningCertificate.ps1")) "Release workflow must not use a development signing certificate."
@@ -200,8 +202,10 @@ Assert-True ($releasePublishWorkflow.Contains("Azure/artifact-signing-action@c7a
 Assert-True ($releasePublishWorkflow.Contains("AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME")) "Release workflow does not require an Azure certificate profile."
 Assert-True ($releasePublishWorkflow.Contains("-PrepareOnly")) "Release workflow does not stage binaries before Azure signing."
 Assert-True ($releasePublishWorkflow.Contains("-UsePreparedStage")) "Release workflow does not build the MSI from Azure-signed binaries."
-Assert-True ($releasePublishWorkflow.Contains("wincred-libsecret-release-signing.txt")) "Release workflow does not publish signer metadata."
-Assert-True ($releasePublishWorkflow.Contains('package["name"] == "wincred-libsecret"')) "Release workflow does not validate the root workspace package version."
+Assert-True ($releasePublishWorkflow.Contains("scripts/release/validate-release-change.sh")) "Release workflow does not validate release-only changes."
+Assert-True ($releasePublishWorkflow.Contains("Write-ReleaseSigningMetadata.ps1")) "Release workflow does not write signer metadata."
+Assert-True ($releaseSigningMetadataScript.Contains("wincred-libsecret-release-signing.txt")) "Release signing metadata script does not publish signer metadata."
+Assert-True ($releaseChangeValidator.Contains('package["name"] == "wincred-libsecret"')) "Release change validator does not validate the root workspace package version."
 Assert-True ($releasePublishWorkflow.Contains("attestations: write")) "Release workflow cannot publish GitHub artifact attestations."
 Assert-True ($releasePublishWorkflow.Contains("artifact-metadata: write")) "Release workflow cannot create attestation artifact metadata."
 Assert-True ($releasePublishWorkflow.Contains("id-token: write")) "Release workflow cannot obtain an artifact-attestation identity token."
