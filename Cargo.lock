@@ -1194,6 +1194,7 @@ dependencies = [
  "thiserror",
  "uuid",
  "wincred-libsecret-protocol",
+ "windows",
  "winreg",
 ]
 
