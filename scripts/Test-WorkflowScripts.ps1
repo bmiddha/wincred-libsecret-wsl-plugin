@@ -53,8 +53,16 @@ $pythonScripts = @(
 if ($pythonScripts.Count -gt 0)
 {
     $pythonCommand = if ($IsWindows) { "python" } else { "python3" }
-    $pythonArguments = @("-B", "-m", "py_compile") + @($pythonScripts.FullName)
-    & $pythonCommand @pythonArguments
+    $pythonSyntaxCheck = @'
+import ast
+import pathlib
+import sys
+
+for file_name in sys.argv[1:]:
+    path = pathlib.Path(file_name)
+    ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+'@
+    & $pythonCommand -B -c $pythonSyntaxCheck @($pythonScripts.FullName)
     if ($LASTEXITCODE -ne 0)
     {
         throw "Python syntax validation failed with exit code $LASTEXITCODE."
