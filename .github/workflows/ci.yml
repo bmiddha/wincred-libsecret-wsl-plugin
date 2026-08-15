@@ -115,7 +115,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash -n packaging/linux/wincred-libsecret-bootstrap.sh scripts/build-linux.sh scripts/test-linux.sh tests/e2e/run-linux-e2e.sh tests/linux/test-bootstrap-no-backup.sh tests/linux/test-refresh-unit-contract.sh tests/linux/test-libsecret-client-compile.sh
+          bash -n packaging/linux/wincred-libsecret-bootstrap.sh scripts/build-linux.sh scripts/test-linux.sh tests/e2e/run-linux-e2e.sh tests/linux/test-bootstrap-no-backup.sh tests/linux/test-refresh-unit-contract.sh tests/linux/test-interop-unit-contract.sh tests/linux/test-libsecret-client-compile.sh
           test -x scripts/build-linux.sh
           test -x scripts/test-linux.sh
           test -x tests/e2e/run-linux-e2e.sh

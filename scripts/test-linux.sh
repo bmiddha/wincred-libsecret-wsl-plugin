@@ -12,6 +12,7 @@ fi
 cd "${repo_root}"
 bash "${repo_root}/tests/linux/test-bootstrap-no-backup.sh"
 bash "${repo_root}/tests/linux/test-refresh-unit-contract.sh"
+bash "${repo_root}/tests/linux/test-interop-unit-contract.sh"
 bash "${repo_root}/tests/linux/test-libsecret-client-compile.sh"
 cargo "${toolchain}" fmt --all -- --check
 cargo "${toolchain}" test --locked \
