@@ -19,6 +19,11 @@ The workflow caches two safe, reproducible inputs:
 - a WSL source-rootfs tarball keyed by its bootstrap script, lockfile, and
   Rust toolchain.
 
+Weekly and manually dispatched runs populate these caches. The release
+publisher calls the workflow from a closed pull-request event, whose
+default-branch cache token is intentionally read-only; that call restores
+available entries but does not save new ones.
+
 The rootfs cache is exported before the E2E begins and contains only Ubuntu
 packages and the pinned Rust toolchain. It never contains repository build
 outputs, test credentials, plugin registration, certificates, or disposable

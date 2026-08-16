@@ -161,6 +161,15 @@ Assert-True `
     ($hostedWslE2eWorkflow -match '(?m)^permissions:\r?\n  actions: write\r?\n  contents: read\r?$') `
     "Hosted WSL E2E must grant the cache action write access while retaining read-only repository contents."
 Assert-True `
+    ($hostedWslE2eWorkflow.Contains("allow_cache_save:")) `
+    "Hosted WSL E2E must let reusable callers opt out of cache writes."
+Assert-True `
+    ($hostedWslE2eWorkflow.Contains("save-if: `${{ inputs.allow_cache_save || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}")) `
+    "Hosted WSL E2E must keep Rust cache restores while allowing release callers to suppress saves."
+Assert-True `
+    ($hostedWslE2eWorkflow.Contains("(inputs.allow_cache_save || github.event_name == 'workflow_dispatch' ||")) `
+    "Hosted WSL E2E must suppress rootfs cache saves for callers without writable cache tokens."
+Assert-True `
     ($hostedWslE2eWorkflow -notmatch '(?m)^  pull_request:\s*$') `
     "Hosted WSL E2E must not run for pull requests."
 Assert-True `
@@ -202,8 +211,29 @@ Assert-True `
     ($releaseHostedE2eBody.Contains("needs: wait-ci")) `
     "Release publish must wait for merge CI before running hosted WSL E2E."
 Assert-True `
-    ($releaseHostedE2eBody -match '(?m)^    permissions:\r?\n      actions: write\r?\n      contents: read\r?$') `
-    "Release publish must not downgrade the hosted WSL E2E cache-save permission."
+    ($releaseHostedE2eBody.Contains("allow_cache_save: false")) `
+    "Release publish must suppress cache saves for its read-only closed-pull-request cache token."
+Assert-True `
+    ($releaseHostedE2eBody -match '(?m)^    permissions:\r?\n      actions: read\r?\n      contents: read\r?$') `
+    "Release publish must retain cache restore access without requesting unavailable cache-write permission."
+Assert-True `
+    ($releasePublisher.Contains('client-id: ${{ secrets.RELEASE_APP_ID }}')) `
+    "Release publishing must use the non-deprecated GitHub App token input."
+Assert-True `
+    (!$releasePublisher.Contains('app-id: ${{ secrets.RELEASE_APP_ID }}')) `
+    "Release publishing must not use the deprecated GitHub App token input."
+Assert-True `
+    ([regex]::Matches($releasePublisher, '(?m)^\s+cache-dependencies: false\r?$').Count -eq 2) `
+    "Release publishing must disable Artifact Signing dependency cache saves on the closed-pull-request trigger."
+$releasePreparation = Get-Content `
+    -LiteralPath (Join-Path $repositoryRoot ".github\workflows\release.yml") `
+    -Raw
+Assert-True `
+    ($releasePreparation.Contains('client-id: ${{ secrets.RELEASE_APP_ID }}')) `
+    "Release preparation must use the non-deprecated GitHub App token input."
+Assert-True `
+    (!$releasePreparation.Contains('app-id: ${{ secrets.RELEASE_APP_ID }}')) `
+    "Release preparation must not use the deprecated GitHub App token input."
 Assert-True `
     ($releasePublishWorkflow.Contains("github.event.pull_request.merged == true") -and `
         $releasePublishWorkflow.Contains("github.event.pull_request.base.ref == github.event.repository.default_branch") -and `
