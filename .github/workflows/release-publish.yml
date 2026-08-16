@@ -96,8 +96,9 @@ jobs:
     uses: ./.github/workflows/hosted-wsl-e2e.yml
     with:
       checkout_ref: ${{ github.event.pull_request.merge_commit_sha }}
+      allow_cache_save: false
     permissions:
-      actions: write
+      actions: read
       contents: read
 
   sign-package-publish:
@@ -117,7 +118,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
+          client-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-contents: write
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -190,6 +191,7 @@ jobs:
           exclude-azure-powershell-credential: true
           exclude-azure-developer-cli-credential: true
           exclude-interactive-browser-credential: true
+          cache-dependencies: false
       - name: Build MSI from the Azure-signed package stage
         shell: pwsh
         run: |
@@ -214,6 +216,7 @@ jobs:
           exclude-azure-powershell-credential: true
           exclude-azure-developer-cli-credential: true
           exclude-interactive-browser-credential: true
+          cache-dependencies: false
       - name: Validate Azure-signed artifacts
         shell: pwsh
         run: |

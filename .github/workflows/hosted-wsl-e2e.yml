@@ -9,6 +9,11 @@ on:
         description: Immutable source revision to validate
         required: false
         type: string
+      allow_cache_save:
+        description: Permit this reusable caller to populate E2E caches
+        required: false
+        type: boolean
+        default: true
   schedule:
     - cron: "17 4 * * 0"
 
@@ -61,6 +66,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: windows-2025-rust-1.97.1-x86_64-pc-windows-msvc
+          save-if: ${{ inputs.allow_cache_save || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' }}
       - name: Prepare cached WSL 2 source distribution
         env:
           WSL_SOURCE_ROOT: ${{ runner.temp }}\wincred-wsl-e2e\source
@@ -72,7 +78,10 @@ jobs:
             -InstallRoot $env:WSL_SOURCE_ROOT `
             -RootfsPath $env:WSL_ROOTFS
       - name: Save cached WSL 2 source rootfs
-        if: steps.wsl-rootfs.outputs.cache-hit != 'true'
+        if: >-
+          steps.wsl-rootfs.outputs.cache-hit != 'true' &&
+          (inputs.allow_cache_save || github.event_name == 'workflow_dispatch' ||
+          github.event_name == 'schedule')
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}\wincred-wsl-e2e\ubuntu-24.04-rootfs.tar
