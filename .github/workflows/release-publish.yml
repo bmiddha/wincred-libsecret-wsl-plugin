@@ -41,7 +41,7 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal
           rustup default 1.97.1
       - name: Install pinned git-cliff
-        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2
+        uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2
         with:
           tool: git-cliff@2.9.1
       - name: Verify the merged change is release-only
@@ -125,7 +125,7 @@ jobs:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
       - name: Install pinned git-cliff
-        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d # v2
+        uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2
         with:
           tool: git-cliff@2.9.1
       - name: Validate package version and release tag
