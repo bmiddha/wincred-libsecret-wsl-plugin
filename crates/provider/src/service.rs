@@ -1031,7 +1031,7 @@ impl ItemObject {
         &self,
         session: OwnedObjectPath,
         #[zbus(header)] header: Header<'_>,
-    ) -> std::result::Result<DbusSecret, SecretServiceError> {
+    ) -> std::result::Result<(DbusSecret,), SecretServiceError> {
         let owner = owner(&header)?;
         let session = session_id(session.as_str())
             .ok_or_else(|| SecretServiceError::NoSuchSession("invalid session path".to_owned()))?;
@@ -1046,6 +1046,7 @@ impl ItemObject {
                 item.content_type,
             )
             .await
+            .map(|secret| (secret,))
             .map_err(dbus)
     }
 
