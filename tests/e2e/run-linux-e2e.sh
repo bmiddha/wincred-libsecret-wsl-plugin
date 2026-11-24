@@ -183,6 +183,9 @@ case "$mode" in
         [[ "$binary_actual" == "$binary_expected" ]] || fail "binary content hash mismatch"
         "$client" write "$run_id" "$work_root" >/dev/null
         "$client" read "$run_id" "$work_root" >/dev/null
+        # One item through the item API: Item.GetSecret must answer with the
+        # (oayays) struct, not its members loose.
+        "$client" item-read "$run_id" "$work_root" >/dev/null
         ;;
     read)
         compile_client

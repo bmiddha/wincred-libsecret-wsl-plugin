@@ -60,6 +60,49 @@ int main(int argc, char **argv) {
         }
         return result;
     }
+    if (strcmp(mode, "item-read") == 0) {
+        /* The convenience API above reads through Service.GetSecrets, which
+           answers with a map of secrets. This path asks for one item and so
+           goes through Item.GetSecret, whose single out-argument has to be the
+           (oayays) struct rather than that struct's four members loose:
+           libsecret rejects the loose form, and this is the call that notices. */
+        SecretService *service = secret_service_get_sync(SECRET_SERVICE_NONE, NULL, &error);
+        if (service == NULL) {
+            return fail(error);
+        }
+        GHashTable *attributes = g_hash_table_new(g_str_hash, g_str_equal);
+        g_hash_table_insert(attributes, (gpointer)"e2e-run", (gpointer)run_id);
+        g_hash_table_insert(attributes, (gpointer)"e2e-kind", (gpointer)kind);
+        GList *items = secret_service_search_sync(service, NULL, attributes,
+                                                  SECRET_SEARCH_NONE, NULL, &error);
+        g_hash_table_unref(attributes);
+        if (items == NULL) {
+            g_object_unref(service);
+            return fail(error);
+        }
+        int result = 1;
+        for (GList *node = items; node != NULL; node = node->next) {
+            SecretItem *item = SECRET_ITEM(node->data);
+            if (!secret_item_load_secret_sync(item, NULL, &error)) {
+                g_list_free_full(items, g_object_unref);
+                g_object_unref(service);
+                return fail(error);
+            }
+            SecretValue *secret = secret_item_get_secret(item);
+            if (secret != NULL) {
+                if (g_strcmp0(secret_value_get_text(secret), value) == 0) {
+                    result = 0;
+                }
+                secret_value_unref(secret);
+            }
+        }
+        g_list_free_full(items, g_object_unref);
+        g_object_unref(service);
+        if (result != 0) {
+            fprintf(stderr, "libsecret E2E item read did not return the stored value\n");
+        }
+        return result;
+    }
     if (strcmp(mode, "clear") == 0) {
         if (!secret_password_clear_sync(&schema, NULL, &error,
                                         "e2e-run", run_id, NULL)) {
